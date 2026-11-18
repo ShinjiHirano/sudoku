@@ -83,7 +83,7 @@ function digit(index: number, value: Digit): void {
 }
 
 function paletteDigit(index: number, value: Digit): void {
-  boardSelectionActive = false;
+  if (value !== 0) boardSelectionActive = false;
   digit(index, value);
 }
 
