@@ -1,7 +1,7 @@
 import './style.css';
 import { recognizeCellVariants, recognizeGrid, warpGrid, type GridCorners, type OcrCellResult, type OcrResult } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
-import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, peerIndexes, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
+import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
 import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
 
@@ -16,7 +16,6 @@ let activePuzzleId = '';
 let mode: Mode = 'play';
 let menuOpen = false;
 let selected = 0;
-let boardSelectionActive = false;
 let paletteSelected: Digit | null = null;
 let showCandidates = false;
 let candidateExclusionMode = false;
@@ -85,7 +84,7 @@ function digit(index: number, value: Digit): void {
   notice = '';
   if (reparseSuggestion?.index === index) reparseSuggestion = null;
   const puzzle = activePuzzle();
-  paletteSelected = value || null;
+  paletteSelected = value;
   if (value !== 0 && boardValue(puzzle, index) !== 0) {
     // A filled cell is a filter source. Clear it before entering a replacement.
     render();
@@ -118,9 +117,10 @@ function digit(index: number, value: Digit): void {
   render();
 }
 
-function paletteDigit(index: number, value: Digit): void {
-  if (value !== 0) boardSelectionActive = false;
-  digit(index, value);
+function selectPaletteDigit(value: Digit): void {
+  notice = '';
+  paletteSelected = paletteSelected === value ? null : value;
+  render();
 }
 
 function undo(): void {
@@ -146,19 +146,17 @@ function retryPuzzle(): void {
   const puzzle = activePuzzle();
   replacePuzzle({ ...puzzle, entries: Array<Digit>(81).fill(0), notes: {} });
   paletteSelected = null;
-  boardSelectionActive = false;
   notice = '';
   render();
 }
 
-function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, selectedValue: Digit, hasBoardSelection: boolean): string {
+function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, selectedValue: Digit): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
   const sameNumber = Boolean(value && value === selectedValue);
   const occupiedOtherNumber = Boolean(selectedValue && value && !sameNumber);
   const candidateUnavailable = Boolean(selectedValue && value === 0 && !effectiveCandidates(puzzle, index).includes(selectedValue));
-  const related = !selectedValue && hasBoardSelection && peerIndexes(selected).includes(index);
   const classNames = [
-    'cell', hasBoardSelection && index === selected ? 'is-selected' : '', related ? 'is-related' : '', candidateUnavailable ? 'is-unavailable' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
+    'cell', candidateUnavailable ? 'is-unavailable' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
@@ -276,8 +274,8 @@ function render(): void {
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
   const noticeText = notice || (complete ? '完成です！' : '');
-  const filterDigit = paletteSelected ?? (boardSelectionActive ? boardValue(puzzle, selected) : 0);
-  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, filterDigit, boardSelectionActive)).join('');
+  const filterDigit = paletteSelected ?? 0;
+  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, filterDigit)).join('');
   const editControls = mode === 'edit' ? '<div class="edit-banner"><span>問題を編集しています</span><div class="edit-actions"><button id="finish-edit">完了</button></div></div>' : '';
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
@@ -287,7 +285,7 @@ function render(): void {
     ${editControls}
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
-    <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button class="${paletteSelected === value ? 'is-palette-selected' : ''}" data-digit="${value}" aria-label="数字 ${value}" aria-pressed="${paletteSelected === value}">${value}</button>`).join('')}<button class="erase" data-digit="0" aria-pressed="false">消去</button></div>
+    <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button class="${paletteSelected === value ? 'is-palette-selected' : ''}" data-digit="${value}" aria-label="数字 ${value}" aria-pressed="${paletteSelected === value}">${value}</button>`).join('')}<button class="erase ${paletteSelected === 0 ? 'is-palette-selected' : ''}" data-digit="0" aria-pressed="${paletteSelected === 0}">消去</button></div>
   </section></section>`}`;
   bindEvents();
 }
@@ -365,7 +363,7 @@ async function runOcr(): Promise<void> {
   try {
     const cropped = warpGrid(scanImage, scanCorners);
     const result = await recognizeGrid(cropped, cropped.width, cropped.height, (done, total) => { scanProgress = `認識中 ${done}/${total}`; const button = document.querySelector('#run-ocr'); if (button) button.textContent = scanProgress; });
-    ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrRectifiedPreviewUrl = result.preview.toDataURL('image/jpeg', .88); ocrInputPreviewUrl = result.inputPreview.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
+    ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrRectifiedPreviewUrl = result.preview.toDataURL('image/jpeg', .88); ocrInputPreviewUrl = result.inputPreview.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; selected = 0;
     mode = 'review'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; notice = ''; render();
   } catch (error) { scanProgress = ''; setNotice(error instanceof Error ? error.message : 'OCR に失敗しました。'); }
 }
@@ -434,17 +432,12 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => {
     notice = '';
     selected = Number(button.dataset.cell);
-    boardSelectionActive = true;
     const value = boardValue(activePuzzle(), selected);
-    if (value) {
-      paletteSelected = ocrSource ? null : value;
-      render();
-      return;
-    }
-    if (paletteSelected) {
+    if (paletteSelected !== null) {
       digit(selected, paletteSelected);
       return;
     }
+    if (value) paletteSelected = value;
     render();
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-review-cell]').forEach((button) => button.addEventListener('click', () => {
@@ -453,11 +446,11 @@ function bindEvents(): void {
     notice = '';
     render();
   }));
-  document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
+  document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => selectPaletteDigit(Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
-  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
-  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
+  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
+  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
   document.querySelector('#candidates-toggle')?.addEventListener('click', () => { showCandidates = !showCandidates; render(); });
   document.querySelector('#exclude-toggle')?.addEventListener('click', () => { candidateExclusionMode = !candidateExclusionMode; if (candidateExclusionMode) showCandidates = true; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
