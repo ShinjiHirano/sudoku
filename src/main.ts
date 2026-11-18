@@ -1,5 +1,5 @@
 import './style.css';
-import { cropGrid, recognizeGrid, type GridCrop } from './ocr';
+import { cropGrid, recognizeCellVariants, recognizeGrid, type GridCrop, type OcrCellResult } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
 import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, peerIndexes, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
@@ -28,6 +28,9 @@ let scanImage: HTMLImageElement | null = null;
 let scanImageUrl = '';
 let scanProgress = '';
 let scanCrop: GridCrop = { left: 0, top: 0, right: 1, bottom: 1 };
+let ocrSource: HTMLCanvasElement | null = null;
+let reparseProgress = '';
+let reparseSuggestion: { index: number; result: OcrCellResult } | null = null;
 
 function activeBook(): Book {
   return books.find((book) => book.id === activeBookId) ?? books[0];
@@ -63,8 +66,15 @@ function setNotice(message: string): void {
   render();
 }
 
+function discardOcrReview(): void {
+  ocrSource = null;
+  reparseProgress = '';
+  reparseSuggestion = null;
+}
+
 function digit(index: number, value: Digit): void {
   notice = '';
+  if (reparseSuggestion?.index === index) reparseSuggestion = null;
   const puzzle = activePuzzle();
   paletteSelected = value || null;
   if (value !== 0 && boardValue(puzzle, index) !== 0) {
@@ -192,12 +202,16 @@ function render(): void {
   const noticeText = notice || (complete ? '完成です！' : '');
   const filterDigit = paletteSelected ?? (boardSelectionActive ? boardValue(puzzle, selected) : 0);
   const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, filterDigit, boardSelectionActive)).join('');
+  const selectedSuggestion = reparseSuggestion?.index === selected ? reparseSuggestion.result : null;
+  const canApplySuggestion = Boolean(selectedSuggestion?.value && boardValue(puzzle, selected) === 0);
+  const editControls = mode === 'edit' ? `<div class="edit-banner"><span>${ocrSource ? 'OCR 結果を確認しています' : '問題を編集しています'}</span><div class="edit-actions">${ocrSource ? `<button id="reparse-cell" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button>` : ''}<button id="finish-edit">完了</button></div></div>
+    ${selectedSuggestion ? `<div class="ocr-suggestion">${selectedSuggestion.value ? `再解析候補: <strong>${selectedSuggestion.value}</strong>（確信度 ${Math.round(selectedSuggestion.confidence)}%）${canApplySuggestion ? '<button id="apply-ocr-suggestion">候補を入力</button>' : ''}` : 'このマスから数字を読み取れませんでした。トリミングを調整するか、手入力してください。'}</div>` : ''}` : '';
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
   ${mode !== 'scan' ? quickControls(book, puzzle) : ''}
   ${menuOpen ? utilityMenu(puzzle) : ''}
   ${mode === 'scan' ? scanPane() : `<section class="play-layout"><section class="board-area">
-    ${mode === 'edit' ? `<div class="edit-banner"><span>問題を編集しています</span><button id="finish-edit">完了</button></div>` : ''}
+    ${editControls}
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
     <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button class="${paletteSelected === value ? 'is-palette-selected' : ''}" data-digit="${value}" aria-label="数字 ${value}" aria-pressed="${paletteSelected === value}">${value}</button>`).join('')}<button class="erase" data-digit="0" aria-pressed="false">消去</button></div>
@@ -235,6 +249,7 @@ async function importFile(file: File): Promise<void> {
 
 function loadScan(file: File): void {
   if (scanImageUrl) URL.revokeObjectURL(scanImageUrl);
+  discardOcrReview();
   const url = URL.createObjectURL(file);
   const image = new Image();
   image.onload = () => { scanImage = image; scanImageUrl = url; scanCrop = { left: 0, top: 0, right: 1, bottom: 1 }; scanProgress = ''; render(); };
@@ -251,8 +266,49 @@ async function runOcr(): Promise<void> {
     const puzzle = activePuzzle();
     const next = { ...puzzle, givens: result.values, entries: Array<Digit>(81).fill(0), notes: {}, updatedAt: new Date().toISOString() };
     replacePuzzle(next); reviewCells = new Set(result.confidence.map((value, index) => value < 75 ? index : -1).filter((index) => index >= 0));
-    mode = 'edit'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; setNotice('OCR 結果を編集画面で確認してください。黄色のマスは低確信度です。'); render();
+    ocrSource = cropped; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
+    mode = 'edit'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; setNotice('OCR 結果を確認してください。空欄や怪しいマスは選んで再解析できます。'); render();
   } catch (error) { scanProgress = ''; setNotice(error instanceof Error ? error.message : 'OCR に失敗しました。'); }
+}
+
+async function reparseSelectedCell(): Promise<void> {
+  if (!ocrSource) return;
+  reparseProgress = '再解析中…';
+  notice = '';
+  render();
+  try {
+    const result = await recognizeCellVariants(ocrSource, ocrSource.width, ocrSource.height, selected, (done, total) => {
+      reparseProgress = `再解析中 ${done}/${total}`;
+      const button = document.querySelector('#reparse-cell');
+      if (button) button.textContent = reparseProgress;
+    });
+    reparseSuggestion = { index: selected, result };
+    reparseProgress = '';
+    notice = result.value ? '再解析候補を確認して、必要なら入力してください。' : '数字を読み取れませんでした。';
+    render();
+  } catch (error) {
+    reparseProgress = '';
+    setNotice(error instanceof Error ? error.message : '再解析に失敗しました。');
+  }
+}
+
+function applyOcrSuggestion(): void {
+  if (!reparseSuggestion || reparseSuggestion.index !== selected || !reparseSuggestion.result.value) return;
+  const puzzle = activePuzzle();
+  if (boardValue(puzzle, selected) !== 0) {
+    setNotice('入力済みの数字は、先に消去してから変更してください。');
+    return;
+  }
+  const next = setGiven(puzzle, selected, reparseSuggestion.result.value);
+  if (next === puzzle) {
+    setNotice(`${reparseSuggestion.result.value} は、このマスには置けません。`);
+    return;
+  }
+  replacePuzzle(next);
+  reviewCells.delete(selected);
+  reparseSuggestion = null;
+  notice = '再解析候補を入力しました。';
+  render();
 }
 
 function bindEvents(): void {
@@ -262,7 +318,7 @@ function bindEvents(): void {
     boardSelectionActive = true;
     const value = boardValue(activePuzzle(), selected);
     if (value) {
-      paletteSelected = value;
+      paletteSelected = ocrSource ? null : value;
       render();
       return;
     }
@@ -275,16 +331,16 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
-  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
-  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
+  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
+  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; discardOcrReview(); render(); });
   document.querySelector('#candidates-toggle')?.addEventListener('click', () => { showCandidates = !showCandidates; render(); });
   document.querySelector('#exclude-toggle')?.addEventListener('click', () => { candidateExclusionMode = !candidateExclusionMode; if (candidateExclusionMode) showCandidates = true; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
-  document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; void persist(); render(); });
-  document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; void persist(); render(); });
-  document.querySelector('#edit-start')?.addEventListener('click', () => { mode = 'edit'; candidateExclusionMode = false; menuOpen = false; render(); });
-  document.querySelector('#finish-edit')?.addEventListener('click', () => { reviewCells.clear(); mode = 'play'; menuOpen = false; render(); });
-  document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = 'scan'; menuOpen = false; render(); });
+  document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; discardOcrReview(); void persist(); render(); });
+  document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; discardOcrReview(); void persist(); render(); });
+  document.querySelector('#edit-start')?.addEventListener('click', () => { discardOcrReview(); mode = 'edit'; candidateExclusionMode = false; menuOpen = false; render(); });
+  document.querySelector('#finish-edit')?.addEventListener('click', () => { reviewCells.clear(); discardOcrReview(); mode = 'play'; menuOpen = false; render(); });
+  document.querySelector('#scan-toggle')?.addEventListener('click', () => { discardOcrReview(); mode = 'scan'; menuOpen = false; render(); });
   document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
   document.querySelector('#retry')?.addEventListener('click', retryPuzzle);
   document.querySelector<HTMLInputElement>('#title-input')?.addEventListener('change', (event) => { const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, title: (event.target as HTMLInputElement).value.trim() || '無題の問題' }); render(); });
@@ -294,6 +350,8 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>('#scan-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) loadScan(file); });
   document.querySelectorAll<HTMLInputElement>('[data-crop]').forEach((input) => input.addEventListener('input', () => { const key = input.dataset.crop as keyof GridCrop; const proposed = Number(input.value) / 100; const next = { ...scanCrop, [key]: proposed }; if (next.right - next.left >= .2 && next.bottom - next.top >= .2) { scanCrop = next; updateCropBox(); } }));
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
+  document.querySelector('#reparse-cell')?.addEventListener('click', () => void reparseSelectedCell());
+  document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);
 }
 
 window.addEventListener('keydown', (event) => {

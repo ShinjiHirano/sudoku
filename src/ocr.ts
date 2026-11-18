@@ -6,6 +6,11 @@ export interface OcrResult {
   confidence: number[];
 }
 
+export interface OcrCellResult {
+  value: Digit;
+  confidence: number;
+}
+
 export interface GridCrop {
   left: number;
   top: number;
@@ -121,7 +126,7 @@ function detectGridLines(source: CanvasImageSource, width: number, height: numbe
   return evenlySpacedLines(width, height);
 }
 
-function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col: number): PreparedCell {
+function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col: number, trimRatio = 0.12, threshold = 175): PreparedCell {
   const canvas = document.createElement('canvas');
   canvas.width = 180;
   canvas.height = 180;
@@ -131,8 +136,8 @@ function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col:
   const top = lines.horizontal[row];
   const cellWidth = lines.vertical[col + 1] - left;
   const cellHeight = lines.horizontal[row + 1] - top;
-  const trimX = cellWidth * 0.12;
-  const trimY = cellHeight * 0.12;
+  const trimX = cellWidth * trimRatio;
+  const trimY = cellHeight * trimRatio;
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(source, left + trimX, top + trimY, cellWidth - trimX * 2, cellHeight - trimY * 2, 0, 0, canvas.width, canvas.height);
@@ -140,7 +145,7 @@ function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col:
   let darkPixels = 0;
   for (let i = 0; i < image.data.length; i += 4) {
     const gray = grayAt(image.data, i);
-    const pixel = gray > 175 ? 255 : 0;
+    const pixel = gray > threshold ? 255 : 0;
     if (pixel === 0) darkPixels += 1;
     image.data[i] = pixel;
     image.data[i + 1] = pixel;
@@ -148,6 +153,25 @@ function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col:
   }
   ctx.putImageData(image, 0, 0);
   return { canvas, inkRatio: darkPixels / (canvas.width * canvas.height) };
+}
+
+async function createDigitWorker() {
+  const worker = await createWorker('eng', 1, { logger: () => undefined, legacyCore: false, legacyLang: false });
+  await worker.setParameters({
+    tessedit_char_whitelist: '123456789',
+    tessedit_pageseg_mode: '10' as Tesseract.PSM,
+  });
+  return worker;
+}
+
+async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell): Promise<OcrCellResult> {
+  if (cell.inkRatio < 0.012) return { value: 0, confidence: 100 };
+  const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
+  const digitText = data.text.replace(/\s/g, '');
+  return {
+    value: /^[1-9]$/.test(digitText) ? Number(digitText) as Digit : 0,
+    confidence: /^[1-9]$/.test(digitText) ? data.confidence : 0,
+  };
 }
 
 /**
@@ -161,32 +185,49 @@ export async function recognizeGrid(
   height: number,
   onProgress: (completed: number, total: number) => void,
 ): Promise<OcrResult> {
-  const worker = await createWorker('eng', 1, { logger: () => undefined, legacyCore: false, legacyLang: false });
+  const worker = await createDigitWorker();
   const values: Digit[] = [];
   const confidence: number[] = [];
   try {
-    await worker.setParameters({
-      tessedit_char_whitelist: '123456789',
-      tessedit_pageseg_mode: '10' as Tesseract.PSM,
-    });
     const lines = detectGridLines(image, width, height);
     for (let index = 0; index < 81; index += 1) {
       const cell = cropCell(image, lines, Math.floor(index / 9), index % 9);
-      if (cell.inkRatio < 0.012) {
-        values.push(0);
-        confidence.push(100);
-        onProgress(index + 1, 81);
-        continue;
-      }
-      const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
-      const digitText = data.text.replace(/\s/g, '');
-      const digit = /^[1-9]$/.test(digitText) ? Number(digitText) as Digit : 0;
-      values.push(digit);
-      confidence.push(digit ? data.confidence : 0);
+      const result = await recognizePreparedCell(worker, cell);
+      values.push(result.value);
+      confidence.push(result.confidence);
       onProgress(index + 1, 81);
     }
   } finally {
     await worker.terminate();
   }
   return { values, confidence };
+}
+
+/** Re-reads one selected cell with several crop and contrast variants. */
+export async function recognizeCellVariants(
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  index: number,
+  onProgress: (completed: number, total: number) => void,
+): Promise<OcrCellResult> {
+  const variants = [
+    { trimRatio: 0.08, threshold: 155 },
+    { trimRatio: 0.12, threshold: 175 },
+    { trimRatio: 0.16, threshold: 195 },
+  ];
+  const worker = await createDigitWorker();
+  const lines = detectGridLines(image, width, height);
+  let best: OcrCellResult = { value: 0, confidence: 0 };
+  try {
+    for (const [variantIndex, variant] of variants.entries()) {
+      const cell = cropCell(image, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
+      const result = await recognizePreparedCell(worker, cell);
+      if (result.value && result.confidence >= best.confidence) best = result;
+      onProgress(variantIndex + 1, variants.length);
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return best;
 }
