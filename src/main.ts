@@ -166,7 +166,7 @@ function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, sele
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
   const noteValues = showCandidates ? effectiveCandidates(puzzle, index) : [];
-  const content = value ? String(value) : noteValues.map((item) => `<span>${item}</span>`).join('');
+  const content = value ? String(value) : noteValues.map((item) => `<span class="${item === selectedValue ? 'is-candidate-selected' : ''}">${item}</span>`).join('');
   return `<button class="${classNames}" data-cell="${index}" aria-label="${Math.floor(index / 9) + 1}行 ${index % 9 + 1}列${value ? `、${value}` : '、空欄'}">${value ? content : `<i class="notes">${content}</i>`}</button>`;
 }
 
