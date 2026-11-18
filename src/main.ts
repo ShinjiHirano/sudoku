@@ -220,7 +220,7 @@ function ocrReviewPane(): string {
     ${selectedSuggestion ? `<div class="ocr-suggestion">${selectedSuggestion.value ? `再解析候補: <strong>${selectedSuggestion.value}</strong>（確信度 ${Math.round(selectedSuggestion.confidence)}%）<button id="apply-ocr-suggestion">候補を反映</button>` : 'このマスから数字を読み取れませんでした。トリミングを調整するか、編集画面で手入力してください。'}</div>` : ''}
     <p class="ocr-selected">選択マスへ手入力</p>
     <div class="keypad ocr-input-keypad" aria-label="OCR確認用の数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button data-review-digit="${value}" aria-label="${value} を入力">${value}</button>`).join('')}<button class="erase" data-review-digit="0" aria-label="空欄にする">空欄にする</button></div>
-    <div class="ocr-review-actions"><button id="reparse-cell" class="primary" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button><button id="confirm-ocr-review">この結果を編集する</button></div>
+    <div class="ocr-review-actions"><button id="reparse-cell" class="primary" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button><button id="confirm-ocr-review">保存して閉じる</button></div>
   </section>`;
 }
 
