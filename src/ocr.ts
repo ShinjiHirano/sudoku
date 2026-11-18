@@ -6,6 +6,8 @@ export interface OcrResult {
   confidence: number[];
   /** The locally rectified grid image used for OCR review. */
   preview: HTMLCanvasElement;
+  /** The cropped and binarized image passed directly to OCR. */
+  inputPreview: HTMLCanvasElement;
 }
 
 export interface OcrCellResult {
@@ -369,6 +371,7 @@ export async function recognizeGrid(
   const values: Digit[] = [];
   const confidence: number[] = [];
   const warpedCells: HTMLCanvasElement[] = [];
+  const preparedCells: HTMLCanvasElement[] = [];
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
@@ -377,6 +380,7 @@ export async function recognizeGrid(
       const warpedCell = warpCell(source, cellCorners(intersections, index));
       warpedCells.push(warpedCell);
       const cell = prepareWarpedCell(warpedCell);
+      preparedCells.push(cell.canvas);
       const result = await recognizePreparedCell(worker, cell);
       values.push(result.value);
       confidence.push(result.confidence);
@@ -385,7 +389,12 @@ export async function recognizeGrid(
   } finally {
     await worker.terminate();
   }
-  return { values, confidence, preview: composeRectifiedPreview(warpedCells) };
+  return {
+    values,
+    confidence,
+    preview: composeRectifiedPreview(warpedCells),
+    inputPreview: composeRectifiedPreview(preparedCells),
+  };
 }
 
 /** Re-reads one selected cell with several crop and contrast variants. */

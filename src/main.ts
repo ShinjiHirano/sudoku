@@ -32,6 +32,7 @@ let scanCorners: GridCorners = defaultGridCorners();
 let ocrSource: HTMLCanvasElement | null = null;
 let ocrPreviewUrl = '';
 let ocrRectifiedPreviewUrl = '';
+let ocrInputPreviewUrl = '';
 let ocrDraft: OcrResult | null = null;
 let reparseProgress = '';
 let reparseSuggestion: { index: number; result: OcrCellResult } | null = null;
@@ -74,6 +75,7 @@ function discardOcrReview(): void {
   ocrSource = null;
   ocrPreviewUrl = '';
   ocrRectifiedPreviewUrl = '';
+  ocrInputPreviewUrl = '';
   ocrDraft = null;
   reparseProgress = '';
   reparseSuggestion = null;
@@ -255,8 +257,9 @@ function ocrReviewPane(): string {
   const selectedLabel = `${Math.floor(selected / 9) + 1}行 ${selected % 9 + 1}列`;
   return `<section class="panel scan-panel ocr-review-panel">
     <div class="screen-actions"><button id="review-cancel">‹ 取り込みを中止</button></div>
-    <div><p class="eyebrow">OCR 確認</p><h2>セル補正後の画像と認識結果を確認</h2><p>下の画像は、各セルを個別に補正して再配置した OCR 用の画像です。空欄や怪しいマスを選び、この画像を見ながら再解析できます。黄色の印は低確信度です。</p></div>
-    <img class="ocr-review-image" src="${ocrRectifiedPreviewUrl}" alt="セルごとに補正して再配置した数独の画像">
+    <div><p class="eyebrow">OCR 確認</p><h2>OCRに渡す画像と認識結果を確認</h2><p>下の画像は、セル補正後に外周を切り落として白黒化した、OCR直前の画像です。罫線が消え、数字が残っていることを確認できます。黄色の印は低確信度です。</p></div>
+    <img class="ocr-review-image" src="${ocrInputPreviewUrl}" alt="外周を除去して白黒化したOCR入力画像">
+    <details class="ocr-original"><summary>セル補正後（罫線あり）の画像を表示</summary><img class="ocr-review-image" src="${ocrRectifiedPreviewUrl}" alt="セルごとに補正して再配置した数独の画像"></details>
     <details class="ocr-original"><summary>台形補正後の写真を表示</summary><img class="ocr-review-image" src="${ocrPreviewUrl}" alt="台形補正後の数独の写真"></details>
     <p class="ocr-selected">選択中: ${selectedLabel}</p>
     <div class="board ocr-review-board" role="grid">${Array.from({ length: 81 }, (_, index) => ocrReviewCell(index, draft)).join('')}</div>
@@ -333,7 +336,7 @@ async function runOcr(): Promise<void> {
   try {
     const cropped = warpGrid(scanImage, scanCorners);
     const result = await recognizeGrid(cropped, cropped.width, cropped.height, (done, total) => { scanProgress = `認識中 ${done}/${total}`; const button = document.querySelector('#run-ocr'); if (button) button.textContent = scanProgress; });
-    ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrRectifiedPreviewUrl = result.preview.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
+    ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrRectifiedPreviewUrl = result.preview.toDataURL('image/jpeg', .88); ocrInputPreviewUrl = result.inputPreview.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
     mode = 'review'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; notice = ''; render();
   } catch (error) { scanProgress = ''; setNotice(error instanceof Error ? error.message : 'OCR に失敗しました。'); }
 }
@@ -366,6 +369,7 @@ function applyOcrSuggestion(): void {
     values: ocrDraft.values.map((value, index) => index === selected ? suggestion.value : value),
     confidence: ocrDraft.confidence.map((value, index) => index === selected ? suggestion.confidence : value),
     preview: ocrDraft.preview,
+    inputPreview: ocrDraft.inputPreview,
   };
   reparseSuggestion = null;
   notice = '';
@@ -378,6 +382,7 @@ function setOcrReviewValue(value: Digit): void {
     values: ocrDraft.values.map((current, index) => index === selected ? value : current),
     confidence: ocrDraft.confidence.map((current, index) => index === selected ? 100 : current),
     preview: ocrDraft.preview,
+    inputPreview: ocrDraft.inputPreview,
   };
   reparseSuggestion = null;
   notice = '';
