@@ -137,9 +137,9 @@ function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, sele
   const sameNumber = Boolean(value && value === selectedValue);
   const occupiedOtherNumber = Boolean(selectedValue && value && !sameNumber);
   const candidateUnavailable = Boolean(selectedValue && value === 0 && !effectiveCandidates(puzzle, index).includes(selectedValue));
-  const related = selectedValue ? candidateUnavailable : hasBoardSelection && peerIndexes(selected).includes(index);
+  const related = !selectedValue && hasBoardSelection && peerIndexes(selected).includes(index);
   const classNames = [
-    'cell', hasBoardSelection && index === selected ? 'is-selected' : '', related ? 'is-related' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
+    'cell', hasBoardSelection && index === selected ? 'is-selected' : '', related ? 'is-related' : '', candidateUnavailable ? 'is-unavailable' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
