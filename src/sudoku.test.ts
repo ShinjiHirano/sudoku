@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockedByDigit, canPlace, candidates, conflicts, setEntry } from './sudoku';
+import { blockedByDigit, canPlace, candidates, conflicts, setEntry, setGiven } from './sudoku';
 import { makePuzzle } from './types';
 
 describe('sudoku rules', () => {
@@ -30,6 +30,13 @@ describe('sudoku rules', () => {
     expect(canPlace(puzzle, 0, 5)).toBe(false);
     expect(setEntry(puzzle, 0, 5)).toBe(puzzle);
     expect(canPlace(puzzle, 0, 4)).toBe(true);
+  });
+
+  it('rejects a conflicting given while editing a puzzle', () => {
+    const puzzle = makePuzzle();
+    puzzle.givens[1] = 8;
+    expect(setGiven(puzzle, 0, 8)).toBe(puzzle);
+    expect(setGiven(puzzle, 0, 4).givens[0]).toBe(4);
   });
 
   it('blocks every peer of the selected digit across the board', () => {

@@ -62,7 +62,7 @@ function setNotice(message: string): void {
 
 function digit(index: number, value: Digit): void {
   const puzzle = activePuzzle();
-  if (mode === 'play' && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
+  if ((mode === 'play' || mode === 'edit') && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
     selected = index;
     setNotice(`${value} は、このマスには置けません。`);
     return;

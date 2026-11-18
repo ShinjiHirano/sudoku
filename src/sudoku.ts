@@ -76,6 +76,7 @@ export function setEntry(puzzle: Puzzle, index: number, value: Digit): Puzzle {
 }
 
 export function setGiven(puzzle: Puzzle, index: number, value: Digit): Puzzle {
+  if (!canPlace(puzzle, index, value)) return puzzle;
   const givens = [...puzzle.givens];
   const entries = [...puzzle.entries];
   givens[index] = value;
