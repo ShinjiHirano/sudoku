@@ -274,7 +274,7 @@ function bindEvents(): void {
   document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; void persist(); render(); });
   document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; void persist(); render(); });
   document.querySelector('#edit-start')?.addEventListener('click', () => { mode = 'edit'; candidateExclusionMode = false; menuOpen = false; render(); });
-  document.querySelector('#finish-edit')?.addEventListener('click', () => { mode = 'play'; menuOpen = false; render(); });
+  document.querySelector('#finish-edit')?.addEventListener('click', () => { reviewCells.clear(); mode = 'play'; menuOpen = false; render(); });
   document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = 'scan'; menuOpen = false; render(); });
   document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
   document.querySelector('#retry')?.addEventListener('click', retryPuzzle);
