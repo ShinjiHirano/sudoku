@@ -16,6 +16,7 @@ let activePuzzleId = '';
 let mode: Mode = 'play';
 let menuOpen = false;
 let selected = 0;
+let paletteSelected: Digit | null = null;
 let noteMode = false;
 let undoStack: Puzzle[] = [];
 let redoStack: Puzzle[] = [];
@@ -62,6 +63,7 @@ function setNotice(message: string): void {
 
 function digit(index: number, value: Digit): void {
   const puzzle = activePuzzle();
+  paletteSelected = value || null;
   if ((mode === 'play' || mode === 'edit') && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
     selected = index;
     setNotice(`${value} は、このマスには置けません。`);
@@ -132,17 +134,18 @@ function render(): void {
   const puzzle = activePuzzle();
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
+  const noticeText = notice || (complete ? '完成です！' : '');
   const selectedValue = boardValue(puzzle, selected);
   const blockedCells = blockedByDigit(puzzle, selectedValue);
   const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, selectedValue)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
-  ${notice || complete ? `<p class="notice" role="status">${notice || '完成です！'}</p>` : ''}
+  <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
   ${menuOpen ? utilityMenu(book, puzzle) : ''}
   ${mode === 'scan' ? scanPane() : `<section class="play-layout"><section class="board-area">
     ${mode === 'edit' ? `<div class="edit-banner"><span>問題を編集しています</span><button id="finish-edit">完了</button></div>` : ''}
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
-    <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button data-digit="${value}" aria-label="数字 ${value}">${value}</button>`).join('')}<button class="erase" data-digit="0">消去</button></div>
+    <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button class="${paletteSelected === value ? 'is-palette-selected' : ''}" data-digit="${value}" aria-label="数字 ${value}" aria-pressed="${paletteSelected === value}">${value}</button>`).join('')}<button class="erase" data-digit="0" aria-pressed="false">消去</button></div>
   </section></section>`}`;
   bindEvents();
 }
@@ -198,7 +201,12 @@ async function runOcr(): Promise<void> {
 }
 
 function bindEvents(): void {
-  document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => { selected = Number(button.dataset.cell); render(); }));
+  document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => {
+    selected = Number(button.dataset.cell);
+    const value = boardValue(activePuzzle(), selected);
+    if (value) paletteSelected = value;
+    render();
+  }));
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => digit(selected, Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
