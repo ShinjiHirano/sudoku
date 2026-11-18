@@ -1,5 +1,5 @@
 import './style.css';
-import { cropGrid, recognizeCellVariants, recognizeGrid, type GridCrop, type OcrCellResult, type OcrResult } from './ocr';
+import { recognizeCellVariants, recognizeGrid, warpGrid, type GridCorners, type OcrCellResult, type OcrResult } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
 import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, peerIndexes, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
@@ -27,7 +27,8 @@ let reviewCells = new Set<number>();
 let scanImage: HTMLImageElement | null = null;
 let scanImageUrl = '';
 let scanProgress = '';
-let scanCrop: GridCrop = { left: 0, top: 0, right: 1, bottom: 1 };
+const defaultGridCorners = (): GridCorners => [{ x: 0.05, y: 0.05 }, { x: 0.95, y: 0.05 }, { x: 0.95, y: 0.95 }, { x: 0.05, y: 0.95 }];
+let scanCorners: GridCorners = defaultGridCorners();
 let ocrSource: HTMLCanvasElement | null = null;
 let ocrPreviewUrl = '';
 let ocrDraft: OcrResult | null = null;
@@ -163,22 +164,61 @@ function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, sele
 }
 
 function scanPane(): string {
-  const cropStyle = `left:${scanCrop.left * 100}%;top:${scanCrop.top * 100}%;right:${(1 - scanCrop.right) * 100}%;bottom:${(1 - scanCrop.bottom) * 100}%;`;
+  const cornerNames = ['左上', '右上', '右下', '左下'];
+  const polygon = scanCorners.map((corner) => `${corner.x * 100},${corner.y * 100}`).join(' ');
   return `<section class="panel scan-panel">
     <div class="screen-actions"><button id="scan-cancel">‹ プレイに戻る</button></div>
-    <div><p class="eyebrow">写真から問題を登録</p><h2>画像を選ぶ</h2><p>数独の外枠を切り出してください。まっすぐ正面から撮影した画像ほど認識しやすくなります。画像は端末内で処理され、外部へ送信されません。</p></div>
+    <div><p class="eyebrow">写真から問題を登録</p><h2>画像を選ぶ</h2><p>数独盤の四隅をドラッグして外枠に合わせてください。台形を正方形に補正してから認識します。画像は端末内で処理され、外部へ送信されません。</p></div>
     <label class="file-button">カメラ／画像を選択<input id="scan-file" type="file" accept="image/*" capture="environment"></label>
-    ${scanImage ? `<div class="scan-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><div class="crop-box" style="${cropStyle}"></div></div><div class="crop-controls"><label>左 <input data-crop="left" type="range" min="0" max="80" step="0.5" value="${(scanCrop.left * 100).toFixed(1)}"></label><label>上 <input data-crop="top" type="range" min="0" max="80" step="0.5" value="${(scanCrop.top * 100).toFixed(1)}"></label><label>右 <input data-crop="right" type="range" min="20" max="100" step="0.5" value="${(scanCrop.right * 100).toFixed(1)}"></label><label>下 <input data-crop="bottom" type="range" min="20" max="100" step="0.5" value="${(scanCrop.bottom * 100).toFixed(1)}"></label></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || 'OCR を実行して編集画面へ'}</button><p class="hint">OCR は印刷状態によって誤認識します。続く編集画面で必ず確認・修正してください。</p>` : ''}
+    ${scanImage ? `<div class="scan-image scan-corner-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><svg class="corner-guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon points="${polygon}"></polygon></svg>${scanCorners.map((corner, index) => `<button class="crop-corner" data-corner="${index}" style="left:${corner.x * 100}%;top:${corner.y * 100}%;" aria-label="${cornerNames[index]}を移動"></button>`).join('')}</div><div class="scan-corner-actions"><button id="reset-corners">枠をリセット</button></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || '台形補正して OCR を実行'}</button><p class="hint">認識後は写真と結果を確認し、再解析や手入力で補正できます。</p>` : ''}
   </section>`;
 }
 
-function updateCropBox(): void {
-  const cropBox = document.querySelector<HTMLElement>('.crop-box');
-  if (!cropBox) return;
-  cropBox.style.left = `${scanCrop.left * 100}%`;
-  cropBox.style.top = `${scanCrop.top * 100}%`;
-  cropBox.style.right = `${(1 - scanCrop.right) * 100}%`;
-  cropBox.style.bottom = `${(1 - scanCrop.bottom) * 100}%`;
+function updateCornerGuide(): void {
+  const polygon = document.querySelector<SVGPolygonElement>('.corner-guide polygon');
+  if (polygon) polygon.setAttribute('points', scanCorners.map((corner) => `${corner.x * 100},${corner.y * 100}`).join(' '));
+  document.querySelectorAll<HTMLElement>('[data-corner]').forEach((corner) => {
+    const index = Number(corner.dataset.corner);
+    corner.style.left = `${scanCorners[index].x * 100}%`;
+    corner.style.top = `${scanCorners[index].y * 100}%`;
+  });
+}
+
+function moveScanCorner(index: number, x: number, y: number): void {
+  const next = scanCorners.map((corner) => ({ ...corner })) as GridCorners;
+  const padding = 0.02;
+  const isLeft = index === 0 || index === 3;
+  const isTop = index === 0 || index === 1;
+  const oppositeX = isLeft ? Math.min(next[1].x, next[2].x) - 0.05 : Math.max(next[0].x, next[3].x) + 0.05;
+  const oppositeY = isTop ? Math.min(next[2].y, next[3].y) - 0.05 : Math.max(next[0].y, next[1].y) + 0.05;
+  next[index] = {
+    x: Math.min(isLeft ? oppositeX : 1 - padding, Math.max(isLeft ? padding : oppositeX, x)),
+    y: Math.min(isTop ? oppositeY : 1 - padding, Math.max(isTop ? padding : oppositeY, y)),
+  };
+  scanCorners = next;
+  updateCornerGuide();
+}
+
+function bindCornerDrag(button: HTMLButtonElement): void {
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    const index = Number(button.dataset.corner);
+    button.setPointerCapture(event.pointerId);
+    const move = (pointerEvent: PointerEvent) => {
+      const image = document.querySelector<HTMLImageElement>('#scan-source');
+      if (!image) return;
+      const rect = image.getBoundingClientRect();
+      moveScanCorner(index, (pointerEvent.clientX - rect.left) / rect.width, (pointerEvent.clientY - rect.top) / rect.height);
+    };
+    const finish = () => {
+      button.removeEventListener('pointermove', move);
+      button.removeEventListener('pointerup', finish);
+      button.removeEventListener('pointercancel', finish);
+    };
+    button.addEventListener('pointermove', move);
+    button.addEventListener('pointerup', finish);
+    button.addEventListener('pointercancel', finish);
+  });
 }
 
 function utilityMenu(puzzle: Puzzle): string {
@@ -279,7 +319,7 @@ function loadScan(file: File): void {
   discardOcrReview();
   const url = URL.createObjectURL(file);
   const image = new Image();
-  image.onload = () => { scanImage = image; scanImageUrl = url; scanCrop = { left: 0, top: 0, right: 1, bottom: 1 }; scanProgress = ''; render(); };
+  image.onload = () => { scanImage = image; scanImageUrl = url; scanCorners = defaultGridCorners(); scanProgress = ''; render(); };
   image.onerror = () => setNotice('画像を開けませんでした。');
   image.src = url;
 }
@@ -288,7 +328,7 @@ async function runOcr(): Promise<void> {
   if (!scanImage) return;
   scanProgress = 'OCR を準備中…'; render();
   try {
-    const cropped = cropGrid(scanImage, scanCrop);
+    const cropped = warpGrid(scanImage, scanCorners);
     const result = await recognizeGrid(cropped, cropped.width, cropped.height, (done, total) => { scanProgress = `認識中 ${done}/${total}`; const button = document.querySelector('#run-ocr'); if (button) button.textContent = scanProgress; });
     ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
     mode = 'review'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; notice = ''; render();
@@ -395,8 +435,9 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>('#import-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void importFile(file); });
   document.querySelector('#drive-save')?.addEventListener('click', async () => { try { await saveToDrive(exportBackup(books)); setNotice('Google Drive に新しいバックアップを保存しました。'); } catch (error) { setNotice(error instanceof Error ? error.message : 'Google Drive への保存に失敗しました。'); } });
   document.querySelector<HTMLInputElement>('#scan-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) loadScan(file); });
-  document.querySelectorAll<HTMLInputElement>('[data-crop]').forEach((input) => input.addEventListener('input', () => { const key = input.dataset.crop as keyof GridCrop; const proposed = Number(input.value) / 100; const next = { ...scanCrop, [key]: proposed }; if (next.right - next.left >= .2 && next.bottom - next.top >= .2) { scanCrop = next; updateCropBox(); } }));
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
+  document.querySelector('#reset-corners')?.addEventListener('click', () => { scanCorners = defaultGridCorners(); render(); });
+  document.querySelectorAll<HTMLButtonElement>('[data-corner]').forEach(bindCornerDrag);
   document.querySelector('#reparse-cell')?.addEventListener('click', () => void reparseSelectedCell());
   document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);
   document.querySelectorAll<HTMLButtonElement>('[data-review-digit]').forEach((button) => button.addEventListener('click', () => setOcrReviewValue(Number(button.dataset.reviewDigit) as Digit)));

@@ -11,12 +11,13 @@ export interface OcrCellResult {
   confidence: number;
 }
 
-export interface GridCrop {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
+export interface GridPoint {
+  x: number;
+  y: number;
 }
+
+/** Clockwise: top-left, top-right, bottom-right, bottom-left. */
+export type GridCorners = [GridPoint, GridPoint, GridPoint, GridPoint];
 
 interface GridLines {
   horizontal: number[];
@@ -28,21 +29,72 @@ interface PreparedCell {
   inkRatio: number;
 }
 
-export function cropGrid(image: HTMLImageElement, crop: GridCrop): HTMLCanvasElement {
+function solveLinearSystem(matrix: number[][]): number[] {
+  const size = matrix.length;
+  for (let pivot = 0; pivot < size; pivot += 1) {
+    let bestRow = pivot;
+    for (let row = pivot + 1; row < size; row += 1) {
+      if (Math.abs(matrix[row][pivot]) > Math.abs(matrix[bestRow][pivot])) bestRow = row;
+    }
+    if (Math.abs(matrix[bestRow][pivot]) < 1e-9) throw new Error('四隅の指定が不正です。');
+    [matrix[pivot], matrix[bestRow]] = [matrix[bestRow], matrix[pivot]];
+    const divisor = matrix[pivot][pivot];
+    for (let column = pivot; column <= size; column += 1) matrix[pivot][column] /= divisor;
+    for (let row = 0; row < size; row += 1) {
+      if (row === pivot) continue;
+      const factor = matrix[row][pivot];
+      for (let column = pivot; column <= size; column += 1) matrix[row][column] -= factor * matrix[pivot][column];
+    }
+  }
+  return matrix.map((row) => row[size]);
+}
+
+/** Rectifies a manually selected quadrilateral into a square canvas. */
+export function warpGrid(image: HTMLImageElement, corners: GridCorners, size = 900): HTMLCanvasElement {
   const sourceWidth = image.naturalWidth;
   const sourceHeight = image.naturalHeight;
-  const x = Math.round(sourceWidth * crop.left);
-  const y = Math.round(sourceHeight * crop.top);
-  const width = Math.round(sourceWidth * (crop.right - crop.left));
-  const height = Math.round(sourceHeight * (crop.bottom - crop.top));
-  if (width < 90 || height < 90) throw new Error('切り出し範囲が小さすぎます。');
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('画像処理を開始できません。');
-  ctx.drawImage(image, x, y, width, height, 0, 0, width, height);
-  return canvas;
+  if (sourceWidth < 90 || sourceHeight < 90) throw new Error('画像が小さすぎます。');
+  const sourceCanvas = document.createElement('canvas');
+  sourceCanvas.width = sourceWidth;
+  sourceCanvas.height = sourceHeight;
+  const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sourceContext) throw new Error('画像処理を開始できません。');
+  sourceContext.drawImage(image, 0, 0);
+  const source = sourceContext.getImageData(0, 0, sourceWidth, sourceHeight);
+  const destination = document.createElement('canvas');
+  destination.width = size;
+  destination.height = size;
+  const destinationContext = destination.getContext('2d');
+  if (!destinationContext) throw new Error('画像処理を開始できません。');
+
+  const unitCorners: GridPoint[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  const equations: number[][] = [];
+  unitCorners.forEach((point, index) => {
+    const targetX = corners[index].x * sourceWidth;
+    const targetY = corners[index].y * sourceHeight;
+    equations.push([point.x, point.y, 1, 0, 0, 0, -point.x * targetX, -point.y * targetX, targetX]);
+    equations.push([0, 0, 0, point.x, point.y, 1, -point.x * targetY, -point.y * targetY, targetY]);
+  });
+  const [a, b, c, d, e, f, g, h] = solveLinearSystem(equations);
+  const output = destinationContext.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    const v = y / (size - 1);
+    for (let x = 0; x < size; x += 1) {
+      const u = x / (size - 1);
+      const divisor = g * u + h * v + 1;
+      const sourceX = Math.round((a * u + b * v + c) / divisor);
+      const sourceY = Math.round((d * u + e * v + f) / divisor);
+      const outputOffset = (y * size + x) * 4;
+      if (sourceX < 0 || sourceX >= sourceWidth || sourceY < 0 || sourceY >= sourceHeight) continue;
+      const sourceOffset = (sourceY * sourceWidth + sourceX) * 4;
+      output.data[outputOffset] = source.data[sourceOffset];
+      output.data[outputOffset + 1] = source.data[sourceOffset + 1];
+      output.data[outputOffset + 2] = source.data[sourceOffset + 2];
+      output.data[outputOffset + 3] = 255;
+    }
+  }
+  destinationContext.putImageData(output, 0, 0);
+  return destination;
 }
 
 function grayAt(data: Uint8ClampedArray, offset: number): number {
