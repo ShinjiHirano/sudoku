@@ -218,6 +218,8 @@ function ocrReviewPane(): string {
     <p class="ocr-selected">選択中: ${selectedLabel}</p>
     <div class="board ocr-review-board" role="grid">${Array.from({ length: 81 }, (_, index) => ocrReviewCell(index, draft)).join('')}</div>
     ${selectedSuggestion ? `<div class="ocr-suggestion">${selectedSuggestion.value ? `再解析候補: <strong>${selectedSuggestion.value}</strong>（確信度 ${Math.round(selectedSuggestion.confidence)}%）<button id="apply-ocr-suggestion">候補を反映</button>` : 'このマスから数字を読み取れませんでした。トリミングを調整するか、編集画面で手入力してください。'}</div>` : ''}
+    <p class="ocr-selected">選択マスへ手入力</p>
+    <div class="keypad ocr-input-keypad" aria-label="OCR確認用の数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button data-review-digit="${value}" aria-label="${value} を入力">${value}</button>`).join('')}<button class="erase" data-review-digit="0" aria-label="空欄にする">空欄にする</button></div>
     <div class="ocr-review-actions"><button id="reparse-cell" class="primary" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button><button id="confirm-ocr-review">この結果を編集する</button></div>
   </section>`;
 }
@@ -326,6 +328,17 @@ function applyOcrSuggestion(): void {
   render();
 }
 
+function setOcrReviewValue(value: Digit): void {
+  if (!ocrDraft) return;
+  ocrDraft = {
+    values: ocrDraft.values.map((current, index) => index === selected ? value : current),
+    confidence: ocrDraft.confidence.map((current, index) => index === selected ? 100 : current),
+  };
+  reparseSuggestion = null;
+  notice = '';
+  render();
+}
+
 function confirmOcrReview(): void {
   if (!ocrDraft) return;
   const puzzle = activePuzzle();
@@ -386,6 +399,7 @@ function bindEvents(): void {
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
   document.querySelector('#reparse-cell')?.addEventListener('click', () => void reparseSelectedCell());
   document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);
+  document.querySelectorAll<HTMLButtonElement>('[data-review-digit]').forEach((button) => button.addEventListener('click', () => setOcrReviewValue(Number(button.dataset.reviewDigit) as Digit)));
   document.querySelector('#confirm-ocr-review')?.addEventListener('click', confirmOcrReview);
 }
 
