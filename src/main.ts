@@ -19,6 +19,7 @@ let selected = 0;
 let paletteSelected: Digit | null = null;
 let showCandidates = false;
 let candidateExclusionMode = false;
+let completionCelebration = false;
 let undoStack: Puzzle[] = [];
 let redoStack: Puzzle[] = [];
 let notice = '';
@@ -111,7 +112,10 @@ function digit(index: number, value: Digit): void {
     return;
   }
   const next = mode === 'edit' ? setGiven(puzzle, index, value) : setEntry(puzzle, index, value);
-  if (next !== puzzle) replacePuzzle(next);
+  if (next !== puzzle) {
+    replacePuzzle(next);
+    if (mode === 'play' && !isComplete(puzzle) && isComplete(next)) completionCelebration = true;
+  }
   selected = index;
   reviewCells.delete(index);
   render();
@@ -146,6 +150,7 @@ function retryPuzzle(): void {
   const puzzle = activePuzzle();
   replacePuzzle({ ...puzzle, entries: Array<Digit>(81).fill(0), notes: {} });
   paletteSelected = null;
+  completionCelebration = false;
   notice = '';
   render();
 }
@@ -268,6 +273,12 @@ function ocrReviewPane(): string {
   </section>`;
 }
 
+function completionOverlay(): string {
+  const colors = ['#f2c94c', '#cd5c42', '#4f9d9a', '#5969ad', '#e67e9d'];
+  const confetti = Array.from({ length: 36 }, (_, index) => `<i style="--x:${(index * 37) % 100}%;--delay:-${(index % 9) * .28}s;--turn:${(index * 47) % 360}deg;--color:${colors[index % colors.length]}"></i>`).join('');
+  return `<section class="completion-overlay" role="dialog" aria-modal="true" aria-labelledby="completion-title"><div class="completion-confetti" aria-hidden="true">${confetti}</div><div class="completion-card"><p class="completion-mark" aria-hidden="true">🎉</p><p class="eyebrow">PUZZLE COMPLETE</p><h2 id="completion-title">完成！</h2><p>おつかれさまでした。</p><button id="completion-close" class="primary">盤面を見る</button></div></section>`;
+}
+
 function render(): void {
   const book = activeBook();
   const puzzle = activePuzzle();
@@ -286,7 +297,8 @@ function render(): void {
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
     <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button class="${paletteSelected === value ? 'is-palette-selected' : ''}" data-digit="${value}" aria-label="数字 ${value}" aria-pressed="${paletteSelected === value}">${value}</button>`).join('')}<button class="erase ${paletteSelected === 0 ? 'is-palette-selected' : ''}" data-digit="0" aria-pressed="${paletteSelected === 0}">消去</button></div>
-  </section></section>`}`;
+  </section></section>`}
+  ${completionCelebration ? completionOverlay() : ''}`;
   bindEvents();
 }
 
@@ -476,6 +488,7 @@ function bindEvents(): void {
   document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);
   document.querySelectorAll<HTMLButtonElement>('[data-review-digit]').forEach((button) => button.addEventListener('click', () => setOcrReviewValue(Number(button.dataset.reviewDigit) as Digit)));
   document.querySelector('#confirm-ocr-review')?.addEventListener('click', confirmOcrReview);
+  document.querySelector('#completion-close')?.addEventListener('click', () => { completionCelebration = false; render(); });
 }
 
 window.addEventListener('keydown', (event) => {
