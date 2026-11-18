@@ -4,6 +4,8 @@ import type { Digit } from './types';
 export interface OcrResult {
   values: Digit[];
   confidence: number[];
+  /** The locally rectified grid image used for OCR review. */
+  preview: HTMLCanvasElement;
 }
 
 export interface OcrCellResult {
@@ -310,6 +312,22 @@ function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.12, threshol
   return { canvas, inkRatio: darkPixels / (canvas.width * canvas.height) };
 }
 
+/** Rebuilds a board from its locally rectified cells so the OCR geometry is inspectable. */
+function composeRectifiedPreview(cells: HTMLCanvasElement[]): HTMLCanvasElement {
+  const cellSize = 100;
+  const canvas = document.createElement('canvas');
+  canvas.width = cellSize * 9;
+  canvas.height = cellSize * 9;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('画像処理を開始できません。');
+  cells.forEach((cell, index) => {
+    const x = (index % 9) * cellSize;
+    const y = Math.floor(index / 9) * cellSize;
+    context.drawImage(cell, x, y, cellSize, cellSize);
+  });
+  return canvas;
+}
+
 async function createDigitWorker() {
   const worker = await createWorker('eng', 1, { logger: () => undefined, legacyCore: false, legacyLang: false });
   await worker.setParameters({
@@ -343,12 +361,15 @@ export async function recognizeGrid(
   const worker = await createDigitWorker();
   const values: Digit[] = [];
   const confidence: number[] = [];
+  const warpedCells: HTMLCanvasElement[] = [];
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
     const intersections = gridIntersections(source, lines);
     for (let index = 0; index < 81; index += 1) {
-      const cell = prepareWarpedCell(warpCell(source, cellCorners(intersections, index)));
+      const warpedCell = warpCell(source, cellCorners(intersections, index));
+      warpedCells.push(warpedCell);
+      const cell = prepareWarpedCell(warpedCell);
       const result = await recognizePreparedCell(worker, cell);
       values.push(result.value);
       confidence.push(result.confidence);
@@ -357,7 +378,7 @@ export async function recognizeGrid(
   } finally {
     await worker.terminate();
   }
-  return { values, confidence };
+  return { values, confidence, preview: composeRectifiedPreview(warpedCells) };
 }
 
 /** Re-reads one selected cell with several crop and contrast variants. */
