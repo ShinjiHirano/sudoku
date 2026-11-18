@@ -26,10 +26,24 @@ interface GridLines {
   vertical: number[];
 }
 
+interface GridPaths {
+  horizontal: number[][];
+  vertical: number[][];
+}
+
+interface CellBoundaries {
+  top: number[];
+  right: number[];
+  bottom: number[];
+  left: number[];
+}
+
 interface PreparedCell {
   canvas: HTMLCanvasElement;
   inkRatio: number;
 }
+
+const OCR_CELL_SIZE = 240;
 
 function solveLinearSystem(matrix: number[][]): number[] {
   const size = matrix.length;
@@ -233,36 +247,35 @@ function traceGridLine(image: ImageData, center: number, vertical: boolean): num
   return smoothPath(path);
 }
 
-function gridIntersections(image: ImageData, lines: GridLines): GridPoint[][] {
-  const verticalPaths = lines.vertical.map((center) => traceGridLine(image, center, true));
-  const horizontalPaths = lines.horizontal.map((center) => traceGridLine(image, center, false));
-  return lines.horizontal.map((horizontalCenter, row) => lines.vertical.map((verticalCenter, column) => {
-    let x = verticalCenter;
-    let y = horizontalCenter;
-    for (let iteration = 0; iteration < 3; iteration += 1) {
-      y = horizontalPaths[row][Math.max(0, Math.min(image.width - 1, Math.round(x)))];
-      x = verticalPaths[column][Math.max(0, Math.min(image.height - 1, Math.round(y)))];
-    }
-    return { x, y };
-  }));
+function traceGridPaths(image: ImageData, lines: GridLines): GridPaths {
+  return {
+    horizontal: lines.horizontal.map((center) => traceGridLine(image, center, false)),
+    vertical: lines.vertical.map((center) => traceGridLine(image, center, true)),
+  };
 }
 
-function cellCorners(intersections: GridPoint[][], index: number): GridCorners {
+function cellBoundaries(paths: GridPaths, index: number): CellBoundaries {
   const row = Math.floor(index / 9);
   const column = index % 9;
-  return [intersections[row][column], intersections[row][column + 1], intersections[row + 1][column + 1], intersections[row + 1][column]];
+  return {
+    top: paths.horizontal[row],
+    right: paths.vertical[column + 1],
+    bottom: paths.horizontal[row + 1],
+    left: paths.vertical[column],
+  };
 }
 
-function warpCell(source: ImageData, corners: GridCorners, size = 180): HTMLCanvasElement {
+function pathAt(path: number[], position: number): number {
+  return path[Math.max(0, Math.min(path.length - 1, Math.round(position)))];
+}
+
+/**
+ * Maps the four traced, potentially curved cell borders to a square. The
+ * iterative mapping keeps every point on a border on the output edge; using
+ * only four corners would leave a book-page curve inside the output cell.
+ */
+function warpCell(source: ImageData, boundaries: CellBoundaries, size = OCR_CELL_SIZE): HTMLCanvasElement {
   const { width, height, data } = source;
-  const unitCorners: GridPoint[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
-  const equations: number[][] = [];
-  unitCorners.forEach((point, index) => {
-    const target = corners[index];
-    equations.push([point.x, point.y, 1, 0, 0, 0, -point.x * target.x, -point.y * target.x, target.x]);
-    equations.push([0, 0, 0, point.x, point.y, 1, -point.x * target.y, -point.y * target.y, target.y]);
-  });
-  const [a, b, c, d, e, f, g, h] = solveLinearSystem(equations);
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -273,9 +286,14 @@ function warpCell(source: ImageData, corners: GridCorners, size = 180): HTMLCanv
     const v = y / (size - 1);
     for (let x = 0; x < size; x += 1) {
       const u = x / (size - 1);
-      const divisor = g * u + h * v + 1;
-      const sourceX = Math.round((a * u + b * v + c) / divisor);
-      const sourceY = Math.round((d * u + e * v + f) / divisor);
+      let sourceX = (pathAt(boundaries.left, height * v) * (1 - u)) + (pathAt(boundaries.right, height * v) * u);
+      let sourceY = (pathAt(boundaries.top, width * u) * (1 - v)) + (pathAt(boundaries.bottom, width * u) * v);
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        sourceX = (pathAt(boundaries.left, sourceY) * (1 - u)) + (pathAt(boundaries.right, sourceY) * u);
+        sourceY = (pathAt(boundaries.top, sourceX) * (1 - v)) + (pathAt(boundaries.bottom, sourceX) * v);
+      }
+      sourceX = Math.round(sourceX);
+      sourceY = Math.round(sourceY);
       if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
       const inputOffset = (sourceY * width + sourceX) * 4;
       const outputOffset = (y * size + x) * 4;
@@ -289,10 +307,10 @@ function warpCell(source: ImageData, corners: GridCorners, size = 180): HTMLCanv
   return canvas;
 }
 
-function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.12, threshold = 175): PreparedCell {
+function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.14, threshold = 135): PreparedCell {
   const canvas = document.createElement('canvas');
-  canvas.width = 180;
-  canvas.height = 180;
+  canvas.width = OCR_CELL_SIZE;
+  canvas.height = OCR_CELL_SIZE;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('画像処理を開始できません。');
   const trim = source.width * trimRatio;
@@ -301,12 +319,17 @@ function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.12, threshol
   context.drawImage(source, trim, trim, source.width - trim * 2, source.height - trim * 2, 0, 0, canvas.width, canvas.height);
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   let darkPixels = 0;
-  for (let offset = 0; offset < image.data.length; offset += 4) {
-    const pixel = grayAt(image.data, offset) > threshold ? 255 : 0;
-    if (pixel === 0) darkPixels += 1;
-    image.data[offset] = pixel;
-    image.data[offset + 1] = pixel;
-    image.data[offset + 2] = pixel;
+  const protectedBorder = Math.round(canvas.width * 0.045);
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const offset = (y * canvas.width + x) * 4;
+      const isBorder = x < protectedBorder || x >= canvas.width - protectedBorder || y < protectedBorder || y >= canvas.height - protectedBorder;
+      const pixel = !isBorder && grayAt(image.data, offset) <= threshold ? 0 : 255;
+      if (pixel === 0) darkPixels += 1;
+      image.data[offset] = pixel;
+      image.data[offset + 1] = pixel;
+      image.data[offset + 2] = pixel;
+    }
   }
   context.putImageData(image, 0, 0);
   return { canvas, inkRatio: darkPixels / (canvas.width * canvas.height) };
@@ -338,7 +361,7 @@ async function createDigitWorker() {
 }
 
 async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell, skipLikelyBlank = true): Promise<OcrCellResult> {
-  if (skipLikelyBlank && cell.inkRatio < 0.012) return { value: 0, confidence: 100 };
+  if (skipLikelyBlank && cell.inkRatio < 0.004) return { value: 0, confidence: 100 };
   const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
   const digitText = data.text.replace(/\s/g, '');
   return {
@@ -365,9 +388,9 @@ export async function recognizeGrid(
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
-    const intersections = gridIntersections(source, lines);
+    const paths = traceGridPaths(source, lines);
     for (let index = 0; index < 81; index += 1) {
-      const warpedCell = warpCell(source, cellCorners(intersections, index));
+      const warpedCell = warpCell(source, cellBoundaries(paths, index));
       warpedCells.push(warpedCell);
       const cell = prepareWarpedCell(warpedCell);
       const result = await recognizePreparedCell(worker, cell);
@@ -391,18 +414,18 @@ export async function recognizeCellVariants(
 ): Promise<OcrCellResult> {
   const worker = await createDigitWorker();
   const variants: Array<{ trimRatio: number; threshold: number }> = [
-    { trimRatio: 0.05, threshold: 125 },
-    { trimRatio: 0.10, threshold: 150 },
-    { trimRatio: 0.14, threshold: 175 },
-    { trimRatio: 0.18, threshold: 200 },
-    { trimRatio: 0.22, threshold: 175 },
+    { trimRatio: 0.08, threshold: 105 },
+    { trimRatio: 0.11, threshold: 120 },
+    { trimRatio: 0.14, threshold: 135 },
+    { trimRatio: 0.17, threshold: 150 },
+    { trimRatio: 0.20, threshold: 165 },
   ];
   let best: OcrCellResult = { value: 0, confidence: 0 };
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
-    const intersections = gridIntersections(source, lines);
-    const warpedCell = warpCell(source, cellCorners(intersections, index));
+    const paths = traceGridPaths(source, lines);
+    const warpedCell = warpCell(source, cellBoundaries(paths, index));
     for (const [variantIndex, variant] of variants.entries()) {
       const cell = prepareWarpedCell(warpedCell, variant.trimRatio, variant.threshold);
       const result = await recognizePreparedCell(worker, cell, false);
