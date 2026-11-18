@@ -16,6 +16,7 @@ let activePuzzleId = '';
 let mode: Mode = 'play';
 let menuOpen = false;
 let selected = 0;
+let boardSelectionActive = false;
 let paletteSelected: Digit | null = null;
 let noteMode = false;
 let undoStack: Puzzle[] = [];
@@ -81,6 +82,11 @@ function digit(index: number, value: Digit): void {
   render();
 }
 
+function paletteDigit(index: number, value: Digit): void {
+  boardSelectionActive = false;
+  digit(index, value);
+}
+
 function undo(): void {
   const puzzle = activePuzzle();
   const previous = undoStack.pop();
@@ -99,13 +105,13 @@ function redo(): void {
   render();
 }
 
-function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit): string {
+function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit, hasBoardSelection: boolean): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
   const sameNumber = Boolean(value && value === selectedValue);
   const occupiedOtherNumber = Boolean(selectedValue && value && !sameNumber);
-  const related = selectedValue ? blockedCells.has(index) && !sameNumber : peerIndexes(selected).includes(index);
+  const related = selectedValue ? blockedCells.has(index) && !sameNumber : hasBoardSelection && peerIndexes(selected).includes(index);
   const classNames = [
-    'cell', index === selected ? 'is-selected' : '', related ? 'is-related' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
+    'cell', hasBoardSelection && index === selected ? 'is-selected' : '', related ? 'is-related' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
@@ -140,9 +146,9 @@ function render(): void {
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
   const noticeText = notice || (complete ? '完成です！' : '');
-  const filterDigit = paletteSelected ?? boardValue(puzzle, selected);
+  const filterDigit = paletteSelected ?? (boardSelectionActive ? boardValue(puzzle, selected) : 0);
   const blockedCells = blockedByDigit(puzzle, filterDigit);
-  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, filterDigit)).join('');
+  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, filterDigit, boardSelectionActive)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
   ${menuOpen ? utilityMenu(book, puzzle) : ''}
@@ -208,11 +214,12 @@ async function runOcr(): Promise<void> {
 function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => {
     selected = Number(button.dataset.cell);
+    boardSelectionActive = true;
     const value = boardValue(activePuzzle(), selected);
     if (value) paletteSelected = value;
     render();
   }));
-  document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => digit(selected, Number(button.dataset.digit) as Digit)));
+  document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
   document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; undoStack = []; redoStack = []; render(); });
