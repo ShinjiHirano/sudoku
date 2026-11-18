@@ -126,6 +126,22 @@ function detectGridLines(source: CanvasImageSource, width: number, height: numbe
   return evenlySpacedLines(width, height);
 }
 
+/** Removes the detected grid strokes before character recognition. */
+function removeGridLines(source: CanvasImageSource, lines: GridLines, width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('画像処理を開始できません。');
+  context.drawImage(source, 0, 0, width, height);
+  const cellSize = Math.min(width, height) / 9;
+  const halfStroke = Math.max(2, Math.round(cellSize * 0.045));
+  context.fillStyle = '#fff';
+  lines.vertical.forEach((position) => context.fillRect(position - halfStroke, 0, halfStroke * 2, height));
+  lines.horizontal.forEach((position) => context.fillRect(0, position - halfStroke, width, halfStroke * 2));
+  return canvas;
+}
+
 function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col: number, trimRatio = 0.12, threshold = 175): PreparedCell {
   const canvas = document.createElement('canvas');
   canvas.width = 180;
@@ -190,8 +206,9 @@ export async function recognizeGrid(
   const confidence: number[] = [];
   try {
     const lines = detectGridLines(image, width, height);
+    const gridless = removeGridLines(image, lines, width, height);
     for (let index = 0; index < 81; index += 1) {
-      const cell = cropCell(image, lines, Math.floor(index / 9), index % 9);
+      const cell = cropCell(gridless, lines, Math.floor(index / 9), index % 9);
       const result = await recognizePreparedCell(worker, cell);
       values.push(result.value);
       confidence.push(result.confidence);
@@ -218,10 +235,11 @@ export async function recognizeCellVariants(
   ];
   const worker = await createDigitWorker();
   const lines = detectGridLines(image, width, height);
+  const gridless = removeGridLines(image, lines, width, height);
   let best: OcrCellResult = { value: 0, confidence: 0 };
   try {
     for (const [variantIndex, variant] of variants.entries()) {
-      const cell = cropCell(image, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
+      const cell = cropCell(gridless, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
       const result = await recognizePreparedCell(worker, cell);
       if (result.value && result.confidence >= best.confidence) best = result;
       onProgress(variantIndex + 1, variants.length);

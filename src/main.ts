@@ -1,11 +1,11 @@
 import './style.css';
-import { cropGrid, recognizeCellVariants, recognizeGrid, type GridCrop, type OcrCellResult } from './ocr';
+import { cropGrid, recognizeCellVariants, recognizeGrid, type GridCrop, type OcrCellResult, type OcrResult } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
 import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, peerIndexes, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
 import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
 
-type Mode = 'play' | 'edit' | 'scan';
+type Mode = 'play' | 'edit' | 'scan' | 'review';
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('表示領域を初期化できません。');
 const app: HTMLDivElement = appElement;
@@ -29,6 +29,8 @@ let scanImageUrl = '';
 let scanProgress = '';
 let scanCrop: GridCrop = { left: 0, top: 0, right: 1, bottom: 1 };
 let ocrSource: HTMLCanvasElement | null = null;
+let ocrPreviewUrl = '';
+let ocrDraft: OcrResult | null = null;
 let reparseProgress = '';
 let reparseSuggestion: { index: number; result: OcrCellResult } | null = null;
 
@@ -68,6 +70,8 @@ function setNotice(message: string): void {
 
 function discardOcrReview(): void {
   ocrSource = null;
+  ocrPreviewUrl = '';
+  ocrDraft = null;
   reparseProgress = '';
   reparseSuggestion = null;
 }
@@ -194,6 +198,30 @@ function quickControls(book: Book, puzzle: Puzzle): string {
   </section>`;
 }
 
+function ocrReviewCell(index: number, draft: OcrResult): string {
+  const value = draft.values[index];
+  const classNames = [
+    'cell', value ? 'is-given' : '', index === selected ? 'is-selected' : '', value && draft.confidence[index] < 75 ? 'needs-review' : '',
+  ].filter(Boolean).join(' ');
+  return `<button class="${classNames}" data-review-cell="${index}" aria-label="${Math.floor(index / 9) + 1}行 ${index % 9 + 1}列${value ? `、認識結果 ${value}` : '、空欄'}">${value || ''}</button>`;
+}
+
+function ocrReviewPane(): string {
+  if (!ocrSource || !ocrDraft) return '<section class="panel scan-panel"><p>OCR確認データを保持できませんでした。</p></section>';
+  const draft = ocrDraft;
+  const selectedSuggestion = reparseSuggestion?.index === selected ? reparseSuggestion.result : null;
+  const selectedLabel = `${Math.floor(selected / 9) + 1}行 ${selected % 9 + 1}列`;
+  return `<section class="panel scan-panel ocr-review-panel">
+    <div class="screen-actions"><button id="review-cancel">‹ 取り込みを中止</button></div>
+    <div><p class="eyebrow">OCR 確認</p><h2>写真と認識結果を確認</h2><p>空欄や怪しいマスを選び、写真を見ながら再解析できます。黄色の印は低確信度です。</p></div>
+    <img class="ocr-review-image" src="${ocrPreviewUrl}" alt="切り出した数独の写真">
+    <p class="ocr-selected">選択中: ${selectedLabel}</p>
+    <div class="board ocr-review-board" role="grid">${Array.from({ length: 81 }, (_, index) => ocrReviewCell(index, draft)).join('')}</div>
+    ${selectedSuggestion ? `<div class="ocr-suggestion">${selectedSuggestion.value ? `再解析候補: <strong>${selectedSuggestion.value}</strong>（確信度 ${Math.round(selectedSuggestion.confidence)}%）<button id="apply-ocr-suggestion">候補を反映</button>` : 'このマスから数字を読み取れませんでした。トリミングを調整するか、編集画面で手入力してください。'}</div>` : ''}
+    <div class="ocr-review-actions"><button id="reparse-cell" class="primary" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button><button id="confirm-ocr-review">この結果を編集する</button></div>
+  </section>`;
+}
+
 function render(): void {
   const book = activeBook();
   const puzzle = activePuzzle();
@@ -202,15 +230,12 @@ function render(): void {
   const noticeText = notice || (complete ? '完成です！' : '');
   const filterDigit = paletteSelected ?? (boardSelectionActive ? boardValue(puzzle, selected) : 0);
   const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, filterDigit, boardSelectionActive)).join('');
-  const selectedSuggestion = reparseSuggestion?.index === selected ? reparseSuggestion.result : null;
-  const canApplySuggestion = Boolean(selectedSuggestion?.value && boardValue(puzzle, selected) === 0);
-  const editControls = mode === 'edit' ? `<div class="edit-banner"><span>${ocrSource ? 'OCR 結果を確認しています' : '問題を編集しています'}</span><div class="edit-actions">${ocrSource ? `<button id="reparse-cell" ${reparseProgress ? 'disabled' : ''}>${reparseProgress || 'このマスを再解析'}</button>` : ''}<button id="finish-edit">完了</button></div></div>
-    ${selectedSuggestion ? `<div class="ocr-suggestion">${selectedSuggestion.value ? `再解析候補: <strong>${selectedSuggestion.value}</strong>（確信度 ${Math.round(selectedSuggestion.confidence)}%）${canApplySuggestion ? '<button id="apply-ocr-suggestion">候補を入力</button>' : ''}` : 'このマスから数字を読み取れませんでした。トリミングを調整するか、手入力してください。'}</div>` : ''}` : '';
+  const editControls = mode === 'edit' ? '<div class="edit-banner"><span>問題を編集しています</span><div class="edit-actions"><button id="finish-edit">完了</button></div></div>' : '';
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
-  ${mode !== 'scan' ? quickControls(book, puzzle) : ''}
+  ${mode === 'play' || mode === 'edit' ? quickControls(book, puzzle) : ''}
   ${menuOpen ? utilityMenu(puzzle) : ''}
-  ${mode === 'scan' ? scanPane() : `<section class="play-layout"><section class="board-area">
+  ${mode === 'scan' ? scanPane() : mode === 'review' ? ocrReviewPane() : `<section class="play-layout"><section class="board-area">
     ${editControls}
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
@@ -263,11 +288,8 @@ async function runOcr(): Promise<void> {
   try {
     const cropped = cropGrid(scanImage, scanCrop);
     const result = await recognizeGrid(cropped, cropped.width, cropped.height, (done, total) => { scanProgress = `認識中 ${done}/${total}`; const button = document.querySelector('#run-ocr'); if (button) button.textContent = scanProgress; });
-    const puzzle = activePuzzle();
-    const next = { ...puzzle, givens: result.values, entries: Array<Digit>(81).fill(0), notes: {}, updatedAt: new Date().toISOString() };
-    replacePuzzle(next); reviewCells = new Set(result.confidence.map((value, index) => value < 75 ? index : -1).filter((index) => index >= 0));
-    ocrSource = cropped; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
-    mode = 'edit'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; setNotice('OCR 結果を確認してください。空欄や怪しいマスは選んで再解析できます。'); render();
+    ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; boardSelectionActive = false; selected = 0;
+    mode = 'review'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; notice = ''; render();
   } catch (error) { scanProgress = ''; setNotice(error instanceof Error ? error.message : 'OCR に失敗しました。'); }
 }
 
@@ -284,7 +306,7 @@ async function reparseSelectedCell(): Promise<void> {
     });
     reparseSuggestion = { index: selected, result };
     reparseProgress = '';
-    notice = result.value ? '再解析候補を確認して、必要なら入力してください。' : '数字を読み取れませんでした。';
+    notice = '';
     render();
   } catch (error) {
     reparseProgress = '';
@@ -293,21 +315,26 @@ async function reparseSelectedCell(): Promise<void> {
 }
 
 function applyOcrSuggestion(): void {
-  if (!reparseSuggestion || reparseSuggestion.index !== selected || !reparseSuggestion.result.value) return;
-  const puzzle = activePuzzle();
-  if (boardValue(puzzle, selected) !== 0) {
-    setNotice('入力済みの数字は、先に消去してから変更してください。');
-    return;
-  }
-  const next = setGiven(puzzle, selected, reparseSuggestion.result.value);
-  if (next === puzzle) {
-    setNotice(`${reparseSuggestion.result.value} は、このマスには置けません。`);
-    return;
-  }
-  replacePuzzle(next);
-  reviewCells.delete(selected);
+  if (!ocrDraft || !reparseSuggestion || reparseSuggestion.index !== selected || !reparseSuggestion.result.value) return;
+  const suggestion = reparseSuggestion.result;
+  ocrDraft = {
+    values: ocrDraft.values.map((value, index) => index === selected ? suggestion.value : value),
+    confidence: ocrDraft.confidence.map((value, index) => index === selected ? suggestion.confidence : value),
+  };
   reparseSuggestion = null;
-  notice = '再解析候補を入力しました。';
+  notice = '';
+  render();
+}
+
+function confirmOcrReview(): void {
+  if (!ocrDraft) return;
+  const puzzle = activePuzzle();
+  const next = { ...puzzle, givens: ocrDraft.values, entries: Array<Digit>(81).fill(0), notes: {}, updatedAt: new Date().toISOString() };
+  replacePuzzle(next);
+  reviewCells = new Set(ocrDraft.confidence.map((value, index) => value < 75 ? index : -1).filter((index) => index >= 0));
+  discardOcrReview();
+  mode = 'edit';
+  notice = 'OCR結果を編集画面へ引き継ぎました。';
   render();
 }
 
@@ -328,6 +355,12 @@ function bindEvents(): void {
     }
     render();
   }));
+  document.querySelectorAll<HTMLButtonElement>('[data-review-cell]').forEach((button) => button.addEventListener('click', () => {
+    selected = Number(button.dataset.reviewCell);
+    reparseSuggestion = null;
+    notice = '';
+    render();
+  }));
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
@@ -342,6 +375,7 @@ function bindEvents(): void {
   document.querySelector('#finish-edit')?.addEventListener('click', () => { reviewCells.clear(); discardOcrReview(); mode = 'play'; menuOpen = false; render(); });
   document.querySelector('#scan-toggle')?.addEventListener('click', () => { discardOcrReview(); mode = 'scan'; menuOpen = false; render(); });
   document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
+  document.querySelector('#review-cancel')?.addEventListener('click', () => { discardOcrReview(); mode = 'play'; notice = ''; render(); });
   document.querySelector('#retry')?.addEventListener('click', retryPuzzle);
   document.querySelector<HTMLInputElement>('#title-input')?.addEventListener('change', (event) => { const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, title: (event.target as HTMLInputElement).value.trim() || '無題の問題' }); render(); });
   document.querySelector('#export')?.addEventListener('click', downloadBackup);
@@ -352,10 +386,11 @@ function bindEvents(): void {
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
   document.querySelector('#reparse-cell')?.addEventListener('click', () => void reparseSelectedCell());
   document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);
+  document.querySelector('#confirm-ocr-review')?.addEventListener('click', confirmOcrReview);
 }
 
 window.addEventListener('keydown', (event) => {
-  if (mode === 'scan' || (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
+  if (mode === 'scan' || mode === 'review' || (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
   if (/^[1-9]$/.test(event.key)) digit(selected, Number(event.key) as Digit);
   else if (event.key === 'Backspace' || event.key === 'Delete') digit(selected, 0);
   else if (event.key === 'ArrowUp') { selected = Math.max(0, selected - 9); render(); }
