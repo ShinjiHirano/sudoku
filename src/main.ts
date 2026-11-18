@@ -63,6 +63,7 @@ function setNotice(message: string): void {
 }
 
 function digit(index: number, value: Digit): void {
+  notice = '';
   const puzzle = activePuzzle();
   paletteSelected = value || null;
   if (value !== 0 && boardValue(puzzle, index) !== 0) {
@@ -213,6 +214,7 @@ async function runOcr(): Promise<void> {
 
 function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => {
+    notice = '';
     selected = Number(button.dataset.cell);
     boardSelectionActive = true;
     const value = boardValue(activePuzzle(), selected);
