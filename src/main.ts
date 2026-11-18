@@ -251,7 +251,7 @@ function quickControls(book: Book, puzzle: Puzzle): string {
   const puzzleIndex = Math.max(0, book.puzzles.findIndex((item) => item.id === puzzle.id));
   return `<section class="quick-controls" aria-label="問題とプレイ操作">
     <label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
-    <div class="puzzle-nav" aria-label="問題を切り替える"><button id="previous-puzzle" ${puzzleIndex === 0 ? 'disabled' : ''} aria-label="前の問題">‹ 前へ</button><span><strong>${puzzleIndex + 1} / ${book.puzzles.length}</strong><small>${escapeHtml(puzzle.title)}</small></span><button id="next-puzzle" ${puzzleIndex === book.puzzles.length - 1 ? 'disabled' : ''} aria-label="次の問題">次へ ›</button></div>
+    <div class="puzzle-nav" aria-label="問題を切り替える"><button id="previous-puzzle" ${puzzleIndex === 0 ? 'disabled' : ''} aria-label="前の問題">‹ 前へ</button><span><strong>${puzzleIndex + 1} / ${book.puzzles.length}</strong></span><button id="next-puzzle" ${puzzleIndex === book.puzzles.length - 1 ? 'disabled' : ''} aria-label="次の問題">次へ ›</button></div>
     ${mode === 'play' ? `<div class="quick-actions"><button id="candidates-toggle" class="${showCandidates ? 'active' : ''}">候補表示 ${showCandidates ? 'ON' : 'OFF'}</button><button id="exclude-toggle" class="${candidateExclusionMode ? 'active' : ''}" aria-pressed="${candidateExclusionMode}">${candidateExclusionMode ? '操作：候補から除外' : '操作：数字を確定'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
   </section>`;
 }
