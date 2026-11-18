@@ -67,7 +67,7 @@ export function canPlace(puzzle: Puzzle, index: number, value: Digit): boolean {
 }
 
 export function setEntry(puzzle: Puzzle, index: number, value: Digit): Puzzle {
-  if (puzzle.givens[index] || !canPlace(puzzle, index, value)) return puzzle;
+  if (puzzle.givens[index] || (puzzle.entries[index] !== 0 && value !== 0) || !canPlace(puzzle, index, value)) return puzzle;
   const entries = [...puzzle.entries];
   entries[index] = value;
   const notes: Notes = { ...puzzle.notes };
@@ -76,7 +76,7 @@ export function setEntry(puzzle: Puzzle, index: number, value: Digit): Puzzle {
 }
 
 export function setGiven(puzzle: Puzzle, index: number, value: Digit): Puzzle {
-  if (!canPlace(puzzle, index, value)) return puzzle;
+  if ((puzzle.givens[index] !== 0 && value !== 0) || !canPlace(puzzle, index, value)) return puzzle;
   const givens = [...puzzle.givens];
   const entries = [...puzzle.entries];
   givens[index] = value;

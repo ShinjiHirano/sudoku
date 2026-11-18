@@ -64,6 +64,11 @@ function setNotice(message: string): void {
 function digit(index: number, value: Digit): void {
   const puzzle = activePuzzle();
   paletteSelected = value || null;
+  if (value !== 0 && boardValue(puzzle, index) !== 0) {
+    // A filled cell is a filter source. Clear it before entering a replacement.
+    render();
+    return;
+  }
   if ((mode === 'play' || mode === 'edit') && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
     selected = index;
     setNotice(`${value} は、このマスには置けません。`);

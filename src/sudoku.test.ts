@@ -32,11 +32,25 @@ describe('sudoku rules', () => {
     expect(canPlace(puzzle, 0, 4)).toBe(true);
   });
 
+  it('requires clearing a player entry before replacing it', () => {
+    const puzzle = makePuzzle();
+    puzzle.entries[0] = 2;
+    expect(setEntry(puzzle, 0, 7)).toBe(puzzle);
+    expect(setEntry(puzzle, 0, 0).entries[0]).toBe(0);
+  });
+
   it('rejects a conflicting given while editing a puzzle', () => {
     const puzzle = makePuzzle();
     puzzle.givens[1] = 8;
     expect(setGiven(puzzle, 0, 8)).toBe(puzzle);
     expect(setGiven(puzzle, 0, 4).givens[0]).toBe(4);
+  });
+
+  it('requires clearing a given before replacing it', () => {
+    const puzzle = makePuzzle();
+    puzzle.givens[0] = 3;
+    expect(setGiven(puzzle, 0, 7)).toBe(puzzle);
+    expect(setGiven(puzzle, 0, 0).givens[0]).toBe(0);
   });
 
   it('blocks every peer of the selected digit across the board', () => {
