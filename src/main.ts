@@ -218,7 +218,15 @@ function bindEvents(): void {
     selected = Number(button.dataset.cell);
     boardSelectionActive = true;
     const value = boardValue(activePuzzle(), selected);
-    if (value) paletteSelected = value;
+    if (value) {
+      paletteSelected = value;
+      render();
+      return;
+    }
+    if (paletteSelected) {
+      digit(selected, paletteSelected);
+      return;
+    }
     render();
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
