@@ -171,7 +171,7 @@ function quickControls(book: Book, puzzle: Puzzle): string {
   return `<section class="quick-controls" aria-label="問題とプレイ操作">
     <label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
     <label>問題<select id="puzzle-select">${book.puzzles.map((item, index) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${index + 1}. ${escapeHtml(item.title)}</option>`).join('')}</select></label>
-    ${mode === 'play' ? `<div class="quick-actions"><button id="candidates-toggle" class="${showCandidates ? 'active' : ''}">候補表示 ${showCandidates ? 'ON' : 'OFF'}</button><button id="exclude-toggle" class="${candidateExclusionMode ? 'active' : ''}">候補除外 ${candidateExclusionMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
+    ${mode === 'play' ? `<div class="quick-actions"><button id="candidates-toggle" class="${showCandidates ? 'active' : ''}">候補表示 ${showCandidates ? 'ON' : 'OFF'}</button><button id="exclude-toggle" class="${candidateExclusionMode ? 'active' : ''}" aria-pressed="${candidateExclusionMode}">${candidateExclusionMode ? '操作：候補から除外' : '操作：数字を確定'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
   </section>`;
 }
 
