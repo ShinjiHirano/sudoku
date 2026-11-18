@@ -342,18 +342,34 @@ async function createDigitWorker() {
   await worker.setParameters({
     tessedit_char_whitelist: '123456789',
     tessedit_pageseg_mode: '10' as Tesseract.PSM,
+    classify_bln_numeric_mode: '1',
   });
   return worker;
 }
 
-async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell, skipLikelyBlank = true): Promise<OcrCellResult> {
-  if (skipLikelyBlank && cell.inkRatio < 0.004) return { value: 0, confidence: 100 };
-  const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
+function digitResult(data: { text: string; confidence: number }): OcrCellResult {
   const digitText = data.text.replace(/\s/g, '');
   return {
     value: /^[1-9]$/.test(digitText) ? Number(digitText) as Digit : 0,
     confidence: /^[1-9]$/.test(digitText) ? data.confidence : 0,
   };
+}
+
+async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell, skipLikelyBlank = true): Promise<OcrCellResult> {
+  if (skipLikelyBlank && cell.inkRatio < 0.004) return { value: 0, confidence: 100 };
+  const output = { text: true, blocks: false, hocr: false, tsv: false };
+  const primary = digitResult((await worker.recognize(cell.canvas, {}, output)).data);
+  if (primary.value) return primary;
+
+  // Some thick printed digits are rejected by Tesseract's single-character
+  // segmentation. Retry only those cells as a single word to avoid extra OCR
+  // work and false positives on the clearly blank cells.
+  await worker.setParameters({ tessedit_pageseg_mode: '8' as Tesseract.PSM });
+  try {
+    return digitResult((await worker.recognize(cell.canvas, {}, output)).data);
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '10' as Tesseract.PSM });
+  }
 }
 
 /**
