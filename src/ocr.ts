@@ -178,48 +178,135 @@ function detectGridLines(source: CanvasImageSource, width: number, height: numbe
   return evenlySpacedLines(width, height);
 }
 
-/** Removes the detected grid strokes before character recognition. */
-function removeGridLines(source: CanvasImageSource, lines: GridLines, width: number, height: number): HTMLCanvasElement {
+function imageDataFromSource(source: CanvasImageSource, width: number, height: number): ImageData {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext('2d');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('画像処理を開始できません。');
   context.drawImage(source, 0, 0, width, height);
-  const cellSize = Math.min(width, height) / 9;
-  const halfStroke = Math.max(2, Math.round(cellSize * 0.045));
-  context.fillStyle = '#fff';
-  lines.vertical.forEach((position) => context.fillRect(position - halfStroke, 0, halfStroke * 2, height));
-  lines.horizontal.forEach((position) => context.fillRect(0, position - halfStroke, width, halfStroke * 2));
+  return context.getImageData(0, 0, width, height);
+}
+
+function smoothPath(path: number[], radius = 6): number[] {
+  return path.map((_, index) => {
+    let sum = 0;
+    let count = 0;
+    for (let point = Math.max(0, index - radius); point <= Math.min(path.length - 1, index + radius); point += 1) {
+      sum += path[point];
+      count += 1;
+    }
+    return sum / count;
+  });
+}
+
+/** Tracks one printed grid line so a gently curved page need not be treated as flat. */
+function traceGridLine(image: ImageData, center: number, vertical: boolean): number[] {
+  const { width, height, data } = image;
+  const pathLength = vertical ? height : width;
+  const crossLength = vertical ? width : height;
+  const radius = Math.max(5, Math.round(crossLength / 9 * 0.2));
+  const thickness = 3;
+  const path: number[] = [];
+  for (let point = 0; point < pathLength; point += 1) {
+    let bestPosition = center;
+    let bestScore = -Infinity;
+    const start = Math.max(0, Math.round(center - radius));
+    const end = Math.min(crossLength - 1, Math.round(center + radius));
+    for (let candidate = start; candidate <= end; candidate += 1) {
+      let score = 0;
+      for (let offset = -thickness; offset <= thickness; offset += 1) {
+        const along = Math.max(0, Math.min(pathLength - 1, point + offset));
+        const x = vertical ? candidate : along;
+        const y = vertical ? along : candidate;
+        score += 255 - grayAt(data, (y * width + x) * 4);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestPosition = candidate;
+      }
+    }
+    path.push(bestPosition);
+  }
+  return smoothPath(path);
+}
+
+function gridIntersections(image: ImageData, lines: GridLines): GridPoint[][] {
+  const verticalPaths = lines.vertical.map((center) => traceGridLine(image, center, true));
+  const horizontalPaths = lines.horizontal.map((center) => traceGridLine(image, center, false));
+  return lines.horizontal.map((horizontalCenter, row) => lines.vertical.map((verticalCenter, column) => {
+    let x = verticalCenter;
+    let y = horizontalCenter;
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      y = horizontalPaths[row][Math.max(0, Math.min(image.width - 1, Math.round(x)))];
+      x = verticalPaths[column][Math.max(0, Math.min(image.height - 1, Math.round(y)))];
+    }
+    return { x, y };
+  }));
+}
+
+function cellCorners(intersections: GridPoint[][], index: number): GridCorners {
+  const row = Math.floor(index / 9);
+  const column = index % 9;
+  return [intersections[row][column], intersections[row][column + 1], intersections[row + 1][column + 1], intersections[row + 1][column]];
+}
+
+function warpCell(source: ImageData, corners: GridCorners, size = 180): HTMLCanvasElement {
+  const { width, height, data } = source;
+  const unitCorners: GridPoint[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  const equations: number[][] = [];
+  unitCorners.forEach((point, index) => {
+    const target = corners[index];
+    equations.push([point.x, point.y, 1, 0, 0, 0, -point.x * target.x, -point.y * target.x, target.x]);
+    equations.push([0, 0, 0, point.x, point.y, 1, -point.x * target.y, -point.y * target.y, target.y]);
+  });
+  const [a, b, c, d, e, f, g, h] = solveLinearSystem(equations);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('画像処理を開始できません。');
+  const output = context.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    const v = y / (size - 1);
+    for (let x = 0; x < size; x += 1) {
+      const u = x / (size - 1);
+      const divisor = g * u + h * v + 1;
+      const sourceX = Math.round((a * u + b * v + c) / divisor);
+      const sourceY = Math.round((d * u + e * v + f) / divisor);
+      if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
+      const inputOffset = (sourceY * width + sourceX) * 4;
+      const outputOffset = (y * size + x) * 4;
+      output.data[outputOffset] = data[inputOffset];
+      output.data[outputOffset + 1] = data[inputOffset + 1];
+      output.data[outputOffset + 2] = data[inputOffset + 2];
+      output.data[outputOffset + 3] = 255;
+    }
+  }
+  context.putImageData(output, 0, 0);
   return canvas;
 }
 
-function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col: number, trimRatio = 0.12, threshold = 175): PreparedCell {
+function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.12, threshold = 175): PreparedCell {
   const canvas = document.createElement('canvas');
   canvas.width = 180;
   canvas.height = 180;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) throw new Error('画像処理を開始できません。');
-  const left = lines.vertical[col];
-  const top = lines.horizontal[row];
-  const cellWidth = lines.vertical[col + 1] - left;
-  const cellHeight = lines.horizontal[row + 1] - top;
-  const trimX = cellWidth * trimRatio;
-  const trimY = cellHeight * trimRatio;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(source, left + trimX, top + trimY, cellWidth - trimX * 2, cellHeight - trimY * 2, 0, 0, canvas.width, canvas.height);
-  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('画像処理を開始できません。');
+  const trim = source.width * trimRatio;
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(source, trim, trim, source.width - trim * 2, source.height - trim * 2, 0, 0, canvas.width, canvas.height);
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
   let darkPixels = 0;
-  for (let i = 0; i < image.data.length; i += 4) {
-    const gray = grayAt(image.data, i);
-    const pixel = gray > threshold ? 255 : 0;
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const pixel = grayAt(image.data, offset) > threshold ? 255 : 0;
     if (pixel === 0) darkPixels += 1;
-    image.data[i] = pixel;
-    image.data[i + 1] = pixel;
-    image.data[i + 2] = pixel;
+    image.data[offset] = pixel;
+    image.data[offset + 1] = pixel;
+    image.data[offset + 2] = pixel;
   }
-  ctx.putImageData(image, 0, 0);
+  context.putImageData(image, 0, 0);
   return { canvas, inkRatio: darkPixels / (canvas.width * canvas.height) };
 }
 
@@ -257,10 +344,11 @@ export async function recognizeGrid(
   const values: Digit[] = [];
   const confidence: number[] = [];
   try {
+    const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
-    const gridless = removeGridLines(image, lines, width, height);
+    const intersections = gridIntersections(source, lines);
     for (let index = 0; index < 81; index += 1) {
-      const cell = cropCell(gridless, lines, Math.floor(index / 9), index % 9);
+      const cell = prepareWarpedCell(warpCell(source, cellCorners(intersections, index)));
       const result = await recognizePreparedCell(worker, cell);
       values.push(result.value);
       confidence.push(result.confidence);
@@ -281,20 +369,21 @@ export async function recognizeCellVariants(
   onProgress: (completed: number, total: number) => void,
 ): Promise<OcrCellResult> {
   const worker = await createDigitWorker();
-  const lines = detectGridLines(image, width, height);
-  const gridless = removeGridLines(image, lines, width, height);
-  const variants: Array<{ source: CanvasImageSource; trimRatio: number; threshold: number }> = [
-    { source: gridless, trimRatio: 0.05, threshold: 125 },
-    { source: gridless, trimRatio: 0.10, threshold: 150 },
-    { source: gridless, trimRatio: 0.14, threshold: 175 },
-    { source: gridless, trimRatio: 0.18, threshold: 200 },
-    // Keep one image with the original strokes in case line removal touched a digit.
-    { source: image, trimRatio: 0.20, threshold: 175 },
+  const variants: Array<{ trimRatio: number; threshold: number }> = [
+    { trimRatio: 0.05, threshold: 125 },
+    { trimRatio: 0.10, threshold: 150 },
+    { trimRatio: 0.14, threshold: 175 },
+    { trimRatio: 0.18, threshold: 200 },
+    { trimRatio: 0.22, threshold: 175 },
   ];
   let best: OcrCellResult = { value: 0, confidence: 0 };
   try {
+    const source = imageDataFromSource(image, width, height);
+    const lines = detectGridLines(image, width, height);
+    const intersections = gridIntersections(source, lines);
+    const warpedCell = warpCell(source, cellCorners(intersections, index));
     for (const [variantIndex, variant] of variants.entries()) {
-      const cell = cropCell(variant.source, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
+      const cell = prepareWarpedCell(warpedCell, variant.trimRatio, variant.threshold);
       const result = await recognizePreparedCell(worker, cell, false);
       if (result.value && result.confidence >= best.confidence) best = result;
       onProgress(variantIndex + 1, variants.length);
