@@ -292,7 +292,8 @@ function warpCell(source: ImageData, corners: GridCorners, size = OCR_CELL_SIZE)
   return canvas;
 }
 
-function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.14, threshold = 135): PreparedCell {
+/** Crops the outer 10% of each cell, where printed grid strokes live. */
+function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.10, threshold = 135): PreparedCell {
   const canvas = document.createElement('canvas');
   canvas.width = OCR_CELL_SIZE;
   canvas.height = OCR_CELL_SIZE;
@@ -304,12 +305,10 @@ function prepareWarpedCell(source: HTMLCanvasElement, trimRatio = 0.14, threshol
   context.drawImage(source, trim, trim, source.width - trim * 2, source.height - trim * 2, 0, 0, canvas.width, canvas.height);
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   let darkPixels = 0;
-  const protectedBorder = Math.round(canvas.width * 0.045);
   for (let y = 0; y < canvas.height; y += 1) {
     for (let x = 0; x < canvas.width; x += 1) {
       const offset = (y * canvas.width + x) * 4;
-      const isBorder = x < protectedBorder || x >= canvas.width - protectedBorder || y < protectedBorder || y >= canvas.height - protectedBorder;
-      const pixel = !isBorder && grayAt(image.data, offset) <= threshold ? 0 : 255;
+      const pixel = grayAt(image.data, offset) <= threshold ? 0 : 255;
       if (pixel === 0) darkPixels += 1;
       image.data[offset] = pixel;
       image.data[offset + 1] = pixel;
@@ -399,11 +398,11 @@ export async function recognizeCellVariants(
 ): Promise<OcrCellResult> {
   const worker = await createDigitWorker();
   const variants: Array<{ trimRatio: number; threshold: number }> = [
-    { trimRatio: 0.08, threshold: 105 },
-    { trimRatio: 0.11, threshold: 120 },
-    { trimRatio: 0.14, threshold: 135 },
-    { trimRatio: 0.17, threshold: 150 },
-    { trimRatio: 0.20, threshold: 165 },
+    { trimRatio: 0.06, threshold: 105 },
+    { trimRatio: 0.08, threshold: 120 },
+    { trimRatio: 0.10, threshold: 135 },
+    { trimRatio: 0.12, threshold: 150 },
+    { trimRatio: 0.14, threshold: 165 },
   ];
   let best: OcrCellResult = { value: 0, confidence: 0 };
   try {
