@@ -14,6 +14,7 @@ let books: Book[] = [];
 let activeBookId = '';
 let activePuzzleId = '';
 let mode: Mode = 'play';
+let menuOpen = false;
 let selected = 0;
 let noteMode = false;
 let undoStack: Puzzle[] = [];
@@ -103,9 +104,20 @@ function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>): str
 function scanPane(): string {
   const cropStyle = `left:${scanCrop.left * 100}%;top:${scanCrop.top * 100}%;right:${(1 - scanCrop.right) * 100}%;bottom:${(1 - scanCrop.bottom) * 100}%;`;
   return `<section class="panel scan-panel">
+    <div class="screen-actions"><button id="scan-cancel">‹ プレイに戻る</button></div>
     <div><p class="eyebrow">写真から問題を登録</p><h2>画像を選ぶ</h2><p>数独の外枠を切り出してください。まっすぐ正面から撮影した画像ほど認識しやすくなります。画像は端末内で処理され、外部へ送信されません。</p></div>
     <label class="file-button">カメラ／画像を選択<input id="scan-file" type="file" accept="image/*" capture="environment"></label>
     ${scanImage ? `<div class="scan-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><div class="crop-box" style="${cropStyle}"></div></div><div class="crop-controls"><label>左 <input data-crop="left" type="range" min="0" max="80" value="${Math.round(scanCrop.left * 100)}"></label><label>上 <input data-crop="top" type="range" min="0" max="80" value="${Math.round(scanCrop.top * 100)}"></label><label>右 <input data-crop="right" type="range" min="20" max="100" value="${Math.round(scanCrop.right * 100)}"></label><label>下 <input data-crop="bottom" type="range" min="20" max="100" value="${Math.round(scanCrop.bottom * 100)}"></label></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || 'OCR を実行して編集画面へ'}</button><p class="hint">OCR は印刷状態によって誤認識します。続く編集画面で必ず確認・修正してください。</p>` : ''}
+  </section>`;
+}
+
+function utilityMenu(book: Book, puzzle: Puzzle): string {
+  return `<section class="utility-menu" aria-label="メニュー">
+    <div class="utility-menu-header"><strong>メニュー</strong><button id="menu-close" aria-label="メニューを閉じる">×</button></div>
+    <section><p class="menu-label">問題</p><label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label><label>問題<select id="puzzle-select">${book.puzzles.map((item, index) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${index + 1}. ${escapeHtml(item.title)}</option>`).join('')}</select></label><div class="menu-actions"><button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button></div></section>
+    <section><p class="menu-label">プレイ</p><div class="menu-actions"><button id="notes-toggle" class="${noteMode ? 'active' : ''}">候補メモ ${noteMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="redo" ${redoStack.length ? '' : 'disabled'}>Redo ↷</button><button id="clear-entries">入力を消去</button></div></section>
+    <section><p class="menu-label">問題を作る</p><label>問題名<input id="title-input" value="${escapeHtml(puzzle.title)}"></label><div class="menu-actions"><button id="edit-start">問題を編集</button><button id="scan-toggle">▣ 写真から取込</button></div></section>
+    <details><summary>バックアップとデータ</summary><div class="menu-actions details-actions"><button id="export">JSON を書き出す</button><label class="file-button">JSON を読み込む<input id="import-file" type="file" accept="application/json,.json,.csv,text/csv"></label><button id="drive-save" ${googleDriveReady() ? '' : 'disabled'}>Google Drive に保存</button></div>${googleDriveReady() ? '' : '<p class="hint">Drive は public/config.js に OAuth Client ID を設定すると有効になります。</p>'}</details>
   </section>`;
 }
 
@@ -115,25 +127,15 @@ function render(): void {
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
   const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet)).join('');
-  app.innerHTML = `<header class="topbar"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><div class="status">${notice || (complete ? '完成です！' : '端末内に自動保存しています')}</div></header>
-  <section class="toolbar" aria-label="操作">
-    <label>問題集 <select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${item.name}</option>`).join('')}</select></label>
-    <label>問題 <select id="puzzle-select">${book.puzzles.map((item, i) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${i + 1}. ${item.title}</option>`).join('')}</select></label>
-    <button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button>
-    <span class="toolbar-spacer"></span><button id="scan-toggle">▣ 写真取込</button>
-  </section>
-  ${mode === 'scan' ? scanPane() : `<section class="game-layout"><section class="board-area">
-    <div class="mode-row"><div class="segmented"><button data-mode="play" class="${mode === 'play' ? 'active' : ''}">解く</button><button data-mode="edit" class="${mode === 'edit' ? 'active' : ''}">問題を編集</button></div>
-    <button id="notes-toggle" class="${noteMode ? 'active' : ''}">候補メモ ${noteMode ? 'ON' : 'OFF'}</button></div>
+  app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
+  ${notice || complete ? `<p class="notice" role="status">${notice || '完成です！'}</p>` : ''}
+  ${menuOpen ? utilityMenu(book, puzzle) : ''}
+  ${mode === 'scan' ? scanPane() : `<section class="play-layout"><section class="board-area">
+    ${mode === 'edit' ? `<div class="edit-banner"><span>問題を編集しています</span><button id="finish-edit">完了</button></div>` : ''}
+    ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
     <div class="board" role="grid">${board}</div>
-    <div class="keypad">${[1,2,3,4,5,6,7,8,9].map((value) => `<button data-digit="${value}">${value}</button>`).join('')}<button class="erase" data-digit="0">消去</button></div>
-    <div class="history"><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="redo" ${redoStack.length ? '' : 'disabled'}>Redo ↷</button><button id="clear-entries">入力を消去</button></div>
-  </section>
-  <aside class="panel side-panel"><p class="eyebrow">${mode === 'edit' ? 'PUZZLE EDITOR' : 'PLAY'}</p><h2>${puzzle.title}</h2><p>${mode === 'edit' ? 'ここで置く数字は出題数字です。矛盾があるマスは赤く表示されます。' : '数字または候補メモを入力できます。'}</p>
-    ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}<label>問題名<input id="title-input" value="${escapeHtml(puzzle.title)}"></label>
-    <hr><button id="export">JSON を書き出す</button><label class="file-button">JSON を読み込む<input id="import-file" type="file" accept="application/json,.json,.csv,text/csv"></label>
-    <button id="drive-save" ${googleDriveReady() ? '' : 'disabled'}>Google Drive に保存</button>${googleDriveReady() ? '' : '<p class="hint">Drive は public/config.js に OAuth Client ID を設定すると有効になります。</p>'}
-  </aside></section>`}`;
+    <div class="keypad" aria-label="数字パレット">${[1,2,3,4,5,6,7,8,9].map((value) => `<button data-digit="${value}" aria-label="数字 ${value}">${value}</button>`).join('')}<button class="erase" data-digit="0">消去</button></div>
+  </section></section>`}`;
   bindEvents();
 }
 
@@ -190,14 +192,18 @@ async function runOcr(): Promise<void> {
 function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-cell]').forEach((button) => button.addEventListener('click', () => { selected = Number(button.dataset.cell); render(); }));
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => digit(selected, Number(button.dataset.digit) as Digit)));
-  document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((button) => button.addEventListener('click', () => { mode = button.dataset.mode as Mode; noteMode = false; render(); }));
+  document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
+  document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
   document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; undoStack = []; redoStack = []; render(); });
   document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; undoStack = []; redoStack = []; render(); });
   document.querySelector('#notes-toggle')?.addEventListener('click', () => { noteMode = !noteMode; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
   document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; void persist(); render(); });
   document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; void persist(); render(); });
-  document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = mode === 'scan' ? 'play' : 'scan'; render(); });
+  document.querySelector('#edit-start')?.addEventListener('click', () => { mode = 'edit'; noteMode = false; menuOpen = false; render(); });
+  document.querySelector('#finish-edit')?.addEventListener('click', () => { mode = 'play'; menuOpen = false; render(); });
+  document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = 'scan'; menuOpen = false; render(); });
+  document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
   document.querySelector('#clear-entries')?.addEventListener('click', () => { if (!window.confirm('プレイヤー入力と候補メモを消去しますか？')) return; const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, entries: Array<Digit>(81).fill(0), notes: {} }); render(); });
   document.querySelector<HTMLInputElement>('#title-input')?.addEventListener('change', (event) => { const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, title: (event.target as HTMLInputElement).value.trim() || '無題の問題' }); render(); });
   document.querySelector('#export')?.addEventListener('click', downloadBackup);
