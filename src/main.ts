@@ -135,9 +135,9 @@ function render(): void {
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
   const noticeText = notice || (complete ? '完成です！' : '');
-  const selectedValue = boardValue(puzzle, selected);
-  const blockedCells = blockedByDigit(puzzle, selectedValue);
-  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, selectedValue)).join('');
+  const filterDigit = paletteSelected ?? boardValue(puzzle, selected);
+  const blockedCells = blockedByDigit(puzzle, filterDigit);
+  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, filterDigit)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
   ${menuOpen ? utilityMenu(book, puzzle) : ''}
