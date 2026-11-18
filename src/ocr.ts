@@ -180,8 +180,8 @@ async function createDigitWorker() {
   return worker;
 }
 
-async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell): Promise<OcrCellResult> {
-  if (cell.inkRatio < 0.012) return { value: 0, confidence: 100 };
+async function recognizePreparedCell(worker: Awaited<ReturnType<typeof createDigitWorker>>, cell: PreparedCell, skipLikelyBlank = true): Promise<OcrCellResult> {
+  if (skipLikelyBlank && cell.inkRatio < 0.012) return { value: 0, confidence: 100 };
   const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
   const digitText = data.text.replace(/\s/g, '');
   return {
@@ -228,19 +228,22 @@ export async function recognizeCellVariants(
   index: number,
   onProgress: (completed: number, total: number) => void,
 ): Promise<OcrCellResult> {
-  const variants = [
-    { trimRatio: 0.08, threshold: 155 },
-    { trimRatio: 0.12, threshold: 175 },
-    { trimRatio: 0.16, threshold: 195 },
-  ];
   const worker = await createDigitWorker();
   const lines = detectGridLines(image, width, height);
   const gridless = removeGridLines(image, lines, width, height);
+  const variants: Array<{ source: CanvasImageSource; trimRatio: number; threshold: number }> = [
+    { source: gridless, trimRatio: 0.05, threshold: 125 },
+    { source: gridless, trimRatio: 0.10, threshold: 150 },
+    { source: gridless, trimRatio: 0.14, threshold: 175 },
+    { source: gridless, trimRatio: 0.18, threshold: 200 },
+    // Keep one image with the original strokes in case line removal touched a digit.
+    { source: image, trimRatio: 0.20, threshold: 175 },
+  ];
   let best: OcrCellResult = { value: 0, confidence: 0 };
   try {
     for (const [variantIndex, variant] of variants.entries()) {
-      const cell = cropCell(gridless, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
-      const result = await recognizePreparedCell(worker, cell);
+      const cell = cropCell(variant.source, lines, Math.floor(index / 9), index % 9, variant.trimRatio, variant.threshold);
+      const result = await recognizePreparedCell(worker, cell, false);
       if (result.value && result.confidence >= best.confidence) best = result;
       onProgress(variantIndex + 1, variants.length);
     }
