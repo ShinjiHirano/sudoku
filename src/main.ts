@@ -154,8 +154,17 @@ function scanPane(): string {
     <div class="screen-actions"><button id="scan-cancel">‹ プレイに戻る</button></div>
     <div><p class="eyebrow">写真から問題を登録</p><h2>画像を選ぶ</h2><p>数独の外枠を切り出してください。まっすぐ正面から撮影した画像ほど認識しやすくなります。画像は端末内で処理され、外部へ送信されません。</p></div>
     <label class="file-button">カメラ／画像を選択<input id="scan-file" type="file" accept="image/*" capture="environment"></label>
-    ${scanImage ? `<div class="scan-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><div class="crop-box" style="${cropStyle}"></div></div><div class="crop-controls"><label>左 <input data-crop="left" type="range" min="0" max="80" value="${Math.round(scanCrop.left * 100)}"></label><label>上 <input data-crop="top" type="range" min="0" max="80" value="${Math.round(scanCrop.top * 100)}"></label><label>右 <input data-crop="right" type="range" min="20" max="100" value="${Math.round(scanCrop.right * 100)}"></label><label>下 <input data-crop="bottom" type="range" min="20" max="100" value="${Math.round(scanCrop.bottom * 100)}"></label></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || 'OCR を実行して編集画面へ'}</button><p class="hint">OCR は印刷状態によって誤認識します。続く編集画面で必ず確認・修正してください。</p>` : ''}
+    ${scanImage ? `<div class="scan-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><div class="crop-box" style="${cropStyle}"></div></div><div class="crop-controls"><label>左 <input data-crop="left" type="range" min="0" max="80" step="0.5" value="${(scanCrop.left * 100).toFixed(1)}"></label><label>上 <input data-crop="top" type="range" min="0" max="80" step="0.5" value="${(scanCrop.top * 100).toFixed(1)}"></label><label>右 <input data-crop="right" type="range" min="20" max="100" step="0.5" value="${(scanCrop.right * 100).toFixed(1)}"></label><label>下 <input data-crop="bottom" type="range" min="20" max="100" step="0.5" value="${(scanCrop.bottom * 100).toFixed(1)}"></label></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || 'OCR を実行して編集画面へ'}</button><p class="hint">OCR は印刷状態によって誤認識します。続く編集画面で必ず確認・修正してください。</p>` : ''}
   </section>`;
+}
+
+function updateCropBox(): void {
+  const cropBox = document.querySelector<HTMLElement>('.crop-box');
+  if (!cropBox) return;
+  cropBox.style.left = `${scanCrop.left * 100}%`;
+  cropBox.style.top = `${scanCrop.top * 100}%`;
+  cropBox.style.right = `${(1 - scanCrop.right) * 100}%`;
+  cropBox.style.bottom = `${(1 - scanCrop.bottom) * 100}%`;
 }
 
 function utilityMenu(puzzle: Puzzle): string {
@@ -283,7 +292,7 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>('#import-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void importFile(file); });
   document.querySelector('#drive-save')?.addEventListener('click', async () => { try { await saveToDrive(exportBackup(books)); setNotice('Google Drive に新しいバックアップを保存しました。'); } catch (error) { setNotice(error instanceof Error ? error.message : 'Google Drive への保存に失敗しました。'); } });
   document.querySelector<HTMLInputElement>('#scan-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) loadScan(file); });
-  document.querySelectorAll<HTMLInputElement>('[data-crop]').forEach((input) => input.addEventListener('input', () => { const key = input.dataset.crop as keyof GridCrop; const proposed = Number(input.value) / 100; const next = { ...scanCrop, [key]: proposed }; if (next.right - next.left >= .2 && next.bottom - next.top >= .2) { scanCrop = next; render(); } }));
+  document.querySelectorAll<HTMLInputElement>('[data-crop]').forEach((input) => input.addEventListener('input', () => { const key = input.dataset.crop as keyof GridCrop; const proposed = Number(input.value) / 100; const next = { ...scanCrop, [key]: proposed }; if (next.right - next.left >= .2 && next.bottom - next.top >= .2) { scanCrop = next; updateCropBox(); } }));
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
 }
 
