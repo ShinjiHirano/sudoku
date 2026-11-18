@@ -152,8 +152,8 @@ function cropCell(source: CanvasImageSource, lines: GridLines, row: number, col:
 
 /**
  * The selected picture must be cropped to the outer edge of a square 9x9 grid.
- * Recognition is deliberately conservative: untrusted values become blank and are
- * highlighted for correction by the caller.
+ * Values read as a single digit are retained even at low confidence, so the
+ * caller can review a useful draft instead of re-entering omitted clues.
  */
 export async function recognizeGrid(
   image: CanvasImageSource,
@@ -180,7 +180,7 @@ export async function recognizeGrid(
       }
       const { data } = await worker.recognize(cell.canvas, {}, { text: true, blocks: false, hocr: false, tsv: false });
       const digitText = data.text.replace(/\s/g, '');
-      const digit = /^[1-9]$/.test(digitText) && data.confidence >= 55 ? Number(digitText) as Digit : 0;
+      const digit = /^[1-9]$/.test(digitText) ? Number(digitText) as Digit : 0;
       values.push(digit);
       confidence.push(digit ? data.confidence : 0);
       onProgress(index + 1, 81);
