@@ -106,6 +106,16 @@ function redo(): void {
   render();
 }
 
+function retryPuzzle(): void {
+  if (!window.confirm('プレイヤー入力と候補メモを消去して、最初からやり直しますか？')) return;
+  const puzzle = activePuzzle();
+  replacePuzzle({ ...puzzle, entries: Array<Digit>(81).fill(0), notes: {} });
+  paletteSelected = null;
+  boardSelectionActive = false;
+  notice = '';
+  render();
+}
+
 function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit, hasBoardSelection: boolean): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
   const sameNumber = Boolean(value && value === selectedValue);
@@ -131,13 +141,20 @@ function scanPane(): string {
   </section>`;
 }
 
-function utilityMenu(book: Book, puzzle: Puzzle): string {
+function utilityMenu(puzzle: Puzzle): string {
   return `<section class="utility-menu" aria-label="メニュー">
     <div class="utility-menu-header"><strong>メニュー</strong><button id="menu-close" aria-label="メニューを閉じる">×</button></div>
-    <section><p class="menu-label">問題</p><label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label><label>問題<select id="puzzle-select">${book.puzzles.map((item, index) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${index + 1}. ${escapeHtml(item.title)}</option>`).join('')}</select></label><div class="menu-actions"><button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button></div></section>
-    <section><p class="menu-label">プレイ</p><div class="menu-actions"><button id="notes-toggle" class="${noteMode ? 'active' : ''}">候補メモ ${noteMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="redo" ${redoStack.length ? '' : 'disabled'}>Redo ↷</button><button id="clear-entries">入力を消去</button></div></section>
+    <section><p class="menu-label">問題を管理</p><div class="menu-actions"><button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button></div></section>
     <section><p class="menu-label">問題を作る</p><label>問題名<input id="title-input" value="${escapeHtml(puzzle.title)}"></label><div class="menu-actions"><button id="edit-start">問題を編集</button><button id="scan-toggle">▣ 写真から取込</button></div></section>
-    <details><summary>バックアップとデータ</summary><div class="menu-actions details-actions"><button id="export">JSON を書き出す</button><label class="file-button">JSON を読み込む<input id="import-file" type="file" accept="application/json,.json,.csv,text/csv"></label><button id="drive-save" ${googleDriveReady() ? '' : 'disabled'}>Google Drive に保存</button></div>${googleDriveReady() ? '' : '<p class="hint">Drive は public/config.js に OAuth Client ID を設定すると有効になります。</p>'}</details>
+    <details><summary>その他の操作</summary><div class="menu-actions details-actions"><button id="redo" ${redoStack.length ? '' : 'disabled'}>Redo ↷</button><button id="export">JSON を書き出す</button><label class="file-button">JSON を読み込む<input id="import-file" type="file" accept="application/json,.json,.csv,text/csv"></label><button id="drive-save" ${googleDriveReady() ? '' : 'disabled'}>Google Drive に保存</button></div>${googleDriveReady() ? '' : '<p class="hint">Drive は public/config.js に OAuth Client ID を設定すると有効になります。</p>'}</details>
+  </section>`;
+}
+
+function quickControls(book: Book, puzzle: Puzzle): string {
+  return `<section class="quick-controls" aria-label="問題とプレイ操作">
+    <label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
+    <label>問題<select id="puzzle-select">${book.puzzles.map((item, index) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${index + 1}. ${escapeHtml(item.title)}</option>`).join('')}</select></label>
+    ${mode === 'play' ? `<div class="quick-actions"><button id="notes-toggle" class="${noteMode ? 'active' : ''}">候補メモ ${noteMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
   </section>`;
 }
 
@@ -152,7 +169,8 @@ function render(): void {
   const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, filterDigit, boardSelectionActive)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
-  ${menuOpen ? utilityMenu(book, puzzle) : ''}
+  ${mode !== 'scan' ? quickControls(book, puzzle) : ''}
+  ${menuOpen ? utilityMenu(puzzle) : ''}
   ${mode === 'scan' ? scanPane() : `<section class="play-layout"><section class="board-area">
     ${mode === 'edit' ? `<div class="edit-banner"><span>問題を編集しています</span><button id="finish-edit">完了</button></div>` : ''}
     ${reviewCells.size ? `<p class="review">要確認: ${reviewCells.size} マス</p>` : ''}
@@ -232,8 +250,8 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-digit]').forEach((button) => button.addEventListener('click', () => paletteDigit(selected, Number(button.dataset.digit) as Digit)));
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
-  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; undoStack = []; redoStack = []; render(); });
-  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; undoStack = []; redoStack = []; render(); });
+  document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
+  document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
   document.querySelector('#notes-toggle')?.addEventListener('click', () => { noteMode = !noteMode; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
   document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; void persist(); render(); });
@@ -242,7 +260,7 @@ function bindEvents(): void {
   document.querySelector('#finish-edit')?.addEventListener('click', () => { mode = 'play'; menuOpen = false; render(); });
   document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = 'scan'; menuOpen = false; render(); });
   document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
-  document.querySelector('#clear-entries')?.addEventListener('click', () => { if (!window.confirm('プレイヤー入力と候補メモを消去しますか？')) return; const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, entries: Array<Digit>(81).fill(0), notes: {} }); render(); });
+  document.querySelector('#retry')?.addEventListener('click', retryPuzzle);
   document.querySelector<HTMLInputElement>('#title-input')?.addEventListener('change', (event) => { const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, title: (event.target as HTMLInputElement).value.trim() || '無題の問題' }); render(); });
   document.querySelector('#export')?.addEventListener('click', downloadBackup);
   document.querySelector<HTMLInputElement>('#import-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void importFile(file); });
