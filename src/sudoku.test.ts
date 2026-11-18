@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockedByDigit, canPlace, candidates, conflicts, setEntry, setGiven } from './sudoku';
+import { blockedByDigit, canPlace, candidates, conflicts, effectiveCandidates, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { makePuzzle } from './types';
 
 describe('sudoku rules', () => {
@@ -16,6 +16,23 @@ describe('sudoku rules', () => {
     puzzle.givens[9] = 2;
     puzzle.givens[10] = 3;
     expect(candidates(puzzle, 0)).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
+  it('removes a manual exclusion from effective candidates without changing rule candidates', () => {
+    const puzzle = makePuzzle();
+    puzzle.givens[1] = 1;
+    const next = toggleCandidateExclusion(puzzle, 0, 2);
+    expect(candidates(next, 0)).toContain(2);
+    expect(effectiveCandidates(next, 0)).not.toContain(2);
+    expect(effectiveCandidates(toggleCandidateExclusion(next, 0, 2), 0)).toContain(2);
+  });
+
+  it('clears a cell exclusion when a value is confirmed in that cell', () => {
+    const puzzle = makePuzzle();
+    const excluded = toggleCandidateExclusion(puzzle, 0, 2);
+    const entered = setEntry(excluded, 0, 1);
+    expect(entered.entries[0]).toBe(1);
+    expect(entered.notes[0]).toBeUndefined();
   });
 
   it('does not overwrite a given with a player entry', () => {

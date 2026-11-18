@@ -62,6 +62,12 @@ export function candidates(puzzle: Puzzle, index: number): Digit[] {
   return DIGITS.filter((digit) => !used.has(digit));
 }
 
+/** Candidates after applying the player's manual exclusions. */
+export function effectiveCandidates(puzzle: Puzzle, index: number): Digit[] {
+  const excluded = new Set(puzzle.notes[index] ?? []);
+  return candidates(puzzle, index).filter((digit) => !excluded.has(digit));
+}
+
 export function canPlace(puzzle: Puzzle, index: number, value: Digit): boolean {
   return value === 0 || !peerIndexes(index).some((peer) => boardValue(puzzle, peer) === value);
 }
@@ -79,16 +85,21 @@ export function setGiven(puzzle: Puzzle, index: number, value: Digit): Puzzle {
   if ((puzzle.givens[index] !== 0 && value !== 0) || !canPlace(puzzle, index, value)) return puzzle;
   const givens = [...puzzle.givens];
   const entries = [...puzzle.entries];
+  const notes: Notes = { ...puzzle.notes };
   givens[index] = value;
   entries[index] = 0;
-  return { ...puzzle, givens, entries, updatedAt: new Date().toISOString() };
+  delete notes[index];
+  return { ...puzzle, givens, entries, notes, updatedAt: new Date().toISOString() };
 }
 
-export function toggleNote(puzzle: Puzzle, index: number, digit: Digit): Puzzle {
-  if (boardValue(puzzle, index) || !digit) return puzzle;
+/** Adds or removes a player exclusion; it never changes the rule-derived candidates. */
+export function toggleCandidateExclusion(puzzle: Puzzle, index: number, digit: Digit): Puzzle {
+  if (boardValue(puzzle, index) || !digit || !candidates(puzzle, index).includes(digit)) return puzzle;
   const current = new Set(puzzle.notes[index] ?? []);
   current.has(digit) ? current.delete(digit) : current.add(digit);
-  const notes = { ...puzzle.notes, [index]: [...current].sort() as Digit[] };
+  const notes = { ...puzzle.notes };
+  if (current.size) notes[index] = [...current].sort() as Digit[];
+  else delete notes[index];
   return { ...puzzle, notes, updatedAt: new Date().toISOString() };
 }
 

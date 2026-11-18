@@ -1,7 +1,7 @@
 import './style.css';
 import { cropGrid, recognizeGrid, type GridCrop } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
-import { blockedByDigit, boardValue, canPlace, candidates, conflicts, isComplete, peerIndexes, setEntry, setGiven, toggleNote } from './sudoku';
+import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, peerIndexes, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
 import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
 
@@ -18,7 +18,8 @@ let menuOpen = false;
 let selected = 0;
 let boardSelectionActive = false;
 let paletteSelected: Digit | null = null;
-let noteMode = false;
+let showCandidates = false;
+let candidateExclusionMode = false;
 let undoStack: Puzzle[] = [];
 let redoStack: Puzzle[] = [];
 let notice = '';
@@ -71,12 +72,27 @@ function digit(index: number, value: Digit): void {
     render();
     return;
   }
-  if ((mode === 'play' || mode === 'edit') && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
+  if (mode === 'play' && candidateExclusionMode && value !== 0) {
+    const next = toggleCandidateExclusion(puzzle, index, value);
+    if (next === puzzle) {
+      setNotice(`${value} は、このマスの候補ではありません。`);
+      return;
+    }
+    replacePuzzle(next);
+    notice = effectiveCandidates(next, index).includes(value)
+      ? `${value} を候補に戻しました。`
+      : `${value} を候補から除外しました。`;
+    selected = index;
+    reviewCells.delete(index);
+    render();
+    return;
+  }
+  if ((mode === 'play' || mode === 'edit') && value !== 0 && !canPlace(puzzle, index, value)) {
     selected = index;
     setNotice(`${value} は、このマスには置けません。`);
     return;
   }
-  const next = mode === 'edit' ? setGiven(puzzle, index, value) : noteMode ? toggleNote(puzzle, index, value) : setEntry(puzzle, index, value);
+  const next = mode === 'edit' ? setGiven(puzzle, index, value) : setEntry(puzzle, index, value);
   if (next !== puzzle) replacePuzzle(next);
   selected = index;
   reviewCells.delete(index);
@@ -116,17 +132,18 @@ function retryPuzzle(): void {
   render();
 }
 
-function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit, hasBoardSelection: boolean): string {
+function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, selectedValue: Digit, hasBoardSelection: boolean): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
   const sameNumber = Boolean(value && value === selectedValue);
   const occupiedOtherNumber = Boolean(selectedValue && value && !sameNumber);
-  const related = selectedValue ? blockedCells.has(index) && !sameNumber : hasBoardSelection && peerIndexes(selected).includes(index);
+  const candidateUnavailable = Boolean(selectedValue && value === 0 && !effectiveCandidates(puzzle, index).includes(selectedValue));
+  const related = selectedValue ? candidateUnavailable : hasBoardSelection && peerIndexes(selected).includes(index);
   const classNames = [
     'cell', hasBoardSelection && index === selected ? 'is-selected' : '', related ? 'is-related' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
-  const noteValues = puzzle.notes[index] ?? (noteMode ? candidates(puzzle, index) : []);
+  const noteValues = showCandidates ? effectiveCandidates(puzzle, index) : [];
   const content = value ? String(value) : noteValues.map((item) => `<span>${item}</span>`).join('');
   return `<button class="${classNames}" data-cell="${index}" aria-label="${Math.floor(index / 9) + 1}行 ${index % 9 + 1}列${value ? `、${value}` : '、空欄'}">${value ? content : `<i class="notes">${content}</i>`}</button>`;
 }
@@ -154,7 +171,7 @@ function quickControls(book: Book, puzzle: Puzzle): string {
   return `<section class="quick-controls" aria-label="問題とプレイ操作">
     <label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
     <label>問題<select id="puzzle-select">${book.puzzles.map((item, index) => `<option value="${item.id}" ${item.id === puzzle.id ? 'selected' : ''}>${index + 1}. ${escapeHtml(item.title)}</option>`).join('')}</select></label>
-    ${mode === 'play' ? `<div class="quick-actions"><button id="notes-toggle" class="${noteMode ? 'active' : ''}">候補メモ ${noteMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
+    ${mode === 'play' ? `<div class="quick-actions"><button id="candidates-toggle" class="${showCandidates ? 'active' : ''}">候補表示 ${showCandidates ? 'ON' : 'OFF'}</button><button id="exclude-toggle" class="${candidateExclusionMode ? 'active' : ''}">候補除外 ${candidateExclusionMode ? 'ON' : 'OFF'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
   </section>`;
 }
 
@@ -165,8 +182,7 @@ function render(): void {
   const complete = isComplete(puzzle);
   const noticeText = notice || (complete ? '完成です！' : '');
   const filterDigit = paletteSelected ?? (boardSelectionActive ? boardValue(puzzle, selected) : 0);
-  const blockedCells = blockedByDigit(puzzle, filterDigit);
-  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, filterDigit, boardSelectionActive)).join('');
+  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, filterDigit, boardSelectionActive)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${noticeText || '　'}</p>
   ${mode !== 'scan' ? quickControls(book, puzzle) : ''}
@@ -252,11 +268,12 @@ function bindEvents(): void {
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
   document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => { activeBookId = (event.target as HTMLSelectElement).value; activePuzzleId = activeBook().puzzles[0]?.id ?? ''; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
   document.querySelector<HTMLSelectElement>('#puzzle-select')?.addEventListener('change', (event) => { activePuzzleId = (event.target as HTMLSelectElement).value; selected = 0; paletteSelected = null; boardSelectionActive = false; undoStack = []; redoStack = []; notice = ''; render(); });
-  document.querySelector('#notes-toggle')?.addEventListener('click', () => { noteMode = !noteMode; render(); });
+  document.querySelector('#candidates-toggle')?.addEventListener('click', () => { showCandidates = !showCandidates; render(); });
+  document.querySelector('#exclude-toggle')?.addEventListener('click', () => { candidateExclusionMode = !candidateExclusionMode; if (candidateExclusionMode) showCandidates = true; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
   document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; void persist(); render(); });
   document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; void persist(); render(); });
-  document.querySelector('#edit-start')?.addEventListener('click', () => { mode = 'edit'; noteMode = false; menuOpen = false; render(); });
+  document.querySelector('#edit-start')?.addEventListener('click', () => { mode = 'edit'; candidateExclusionMode = false; menuOpen = false; render(); });
   document.querySelector('#finish-edit')?.addEventListener('click', () => { mode = 'play'; menuOpen = false; render(); });
   document.querySelector('#scan-toggle')?.addEventListener('click', () => { mode = 'scan'; menuOpen = false; render(); });
   document.querySelector('#scan-cancel')?.addEventListener('click', () => { mode = 'play'; render(); });
