@@ -95,9 +95,10 @@ function redo(): void {
 function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
   const sameNumber = Boolean(value && value === selectedValue);
+  const occupiedOtherNumber = Boolean(selectedValue && value && !sameNumber);
   const related = selectedValue ? blockedCells.has(index) && !sameNumber : peerIndexes(selected).includes(index);
   const classNames = [
-    'cell', index === selected ? 'is-selected' : '', related ? 'is-related' : '', sameNumber ? 'is-same' : '',
+    'cell', index === selected ? 'is-selected' : '', related ? 'is-related' : '', occupiedOtherNumber ? 'is-occupied' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
     puzzle.givens[index] ? 'is-given' : '',
   ].filter(Boolean).join(' ');
