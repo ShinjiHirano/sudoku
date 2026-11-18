@@ -62,8 +62,12 @@ export function candidates(puzzle: Puzzle, index: number): Digit[] {
   return DIGITS.filter((digit) => !used.has(digit));
 }
 
+export function canPlace(puzzle: Puzzle, index: number, value: Digit): boolean {
+  return value === 0 || !peerIndexes(index).some((peer) => boardValue(puzzle, peer) === value);
+}
+
 export function setEntry(puzzle: Puzzle, index: number, value: Digit): Puzzle {
-  if (puzzle.givens[index]) return puzzle;
+  if (puzzle.givens[index] || !canPlace(puzzle, index, value)) return puzzle;
   const entries = [...puzzle.entries];
   entries[index] = value;
   const notes: Notes = { ...puzzle.notes };

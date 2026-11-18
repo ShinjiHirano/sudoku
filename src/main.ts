@@ -1,7 +1,7 @@
 import './style.css';
 import { cropGrid, recognizeGrid, type GridCrop } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
-import { blockedByDigit, boardValue, candidates, conflicts, isComplete, peerIndexes, setEntry, setGiven, toggleNote } from './sudoku';
+import { blockedByDigit, boardValue, canPlace, candidates, conflicts, isComplete, peerIndexes, setEntry, setGiven, toggleNote } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
 import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
 
@@ -62,6 +62,11 @@ function setNotice(message: string): void {
 
 function digit(index: number, value: Digit): void {
   const puzzle = activePuzzle();
+  if (mode === 'play' && !noteMode && value !== 0 && !canPlace(puzzle, index, value)) {
+    selected = index;
+    setNotice(`${value} は、このマスには置けません。`);
+    return;
+  }
   const next = mode === 'edit' ? setGiven(puzzle, index, value) : noteMode ? toggleNote(puzzle, index, value) : setEntry(puzzle, index, value);
   if (next !== puzzle) replacePuzzle(next);
   selected = index;
