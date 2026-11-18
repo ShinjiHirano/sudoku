@@ -174,7 +174,7 @@ function scanPane(): string {
     <div class="screen-actions"><button id="scan-cancel">‹ プレイに戻る</button></div>
     <div><p class="eyebrow">写真から問題を登録</p><h2>画像を選ぶ</h2><p>数独盤の四隅をドラッグして外枠に合わせてください。台形を正方形に補正してから認識します。画像は端末内で処理され、外部へ送信されません。</p></div>
     <label class="file-button">カメラ／画像を選択<input id="scan-file" type="file" accept="image/*" capture="environment"></label>
-    ${scanImage ? `<div class="scan-image scan-corner-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><svg class="corner-guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon points="${polygon}"></polygon></svg>${scanCorners.map((corner, index) => `<button class="crop-corner" data-corner="${index}" style="left:${corner.x * 100}%;top:${corner.y * 100}%;" aria-label="${cornerNames[index]}を移動"></button>`).join('')}</div><div class="scan-corner-actions"><button id="reset-corners">枠をリセット</button></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || '台形補正して OCR を実行'}</button><p class="hint">認識後は写真と結果を確認し、再解析や手入力で補正できます。</p>` : ''}
+    ${scanImage ? `<div class="scan-image scan-corner-image"><img id="scan-source" src="${scanImageUrl}" alt="選択した数独の画像"><svg class="corner-guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon points="${polygon}"></polygon></svg>${scanCorners.map((corner, index) => `<button class="crop-corner" data-corner="${index}" style="left:${corner.x * 100}%;top:${corner.y * 100}%;" aria-label="${cornerNames[index]}を移動"></button>`).join('')}</div><div class="scan-corner-actions"><button id="rotate-left" aria-label="画像を左へ90度回転">↶ 90°</button><button id="reset-corners">枠をリセット</button><button id="rotate-right" aria-label="画像を右へ90度回転">↷ 90°</button></div><button id="run-ocr" class="primary" ${scanProgress ? 'disabled' : ''}>${scanProgress || '台形補正して OCR を実行'}</button><p class="hint">向きが横になった写真は、↶／↷ 90°で正立させてから四隅を指定します。認識後は写真と結果を確認し、再解析や手入力で補正できます。</p>` : ''}
   </section>`;
 }
 
@@ -330,6 +330,35 @@ function loadScan(file: File): void {
   image.src = url;
 }
 
+function rotateScan(direction: -1 | 1): void {
+  if (!scanImage) return;
+  const source = scanImage;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.naturalHeight;
+  canvas.height = source.naturalWidth;
+  const context = canvas.getContext('2d');
+  if (!context) { setNotice('画像を回転できませんでした。'); return; }
+  if (direction === 1) {
+    context.translate(canvas.width, 0);
+    context.rotate(Math.PI / 2);
+  } else {
+    context.translate(0, canvas.height);
+    context.rotate(-Math.PI / 2);
+  }
+  context.drawImage(source, 0, 0);
+  const rotatedUrl = canvas.toDataURL('image/jpeg', .94);
+  const rotated = new Image();
+  rotated.onload = () => {
+    if (scanImageUrl.startsWith('blob:')) URL.revokeObjectURL(scanImageUrl);
+    scanImage = rotated;
+    scanImageUrl = rotatedUrl;
+    scanCorners = defaultGridCorners();
+    render();
+  };
+  rotated.onerror = () => setNotice('画像を回転できませんでした。');
+  rotated.src = rotatedUrl;
+}
+
 async function runOcr(): Promise<void> {
   if (!scanImage) return;
   scanProgress = 'OCR を準備中…'; render();
@@ -447,6 +476,8 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>('#scan-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) loadScan(file); });
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
   document.querySelector('#reset-corners')?.addEventListener('click', () => { scanCorners = defaultGridCorners(); render(); });
+  document.querySelector('#rotate-left')?.addEventListener('click', () => rotateScan(-1));
+  document.querySelector('#rotate-right')?.addEventListener('click', () => rotateScan(1));
   document.querySelectorAll<HTMLButtonElement>('[data-corner]').forEach(bindCornerDrag);
   document.querySelector('#reparse-cell')?.addEventListener('click', () => void reparseSelectedCell());
   document.querySelector('#apply-ocr-suggestion')?.addEventListener('click', applyOcrSuggestion);

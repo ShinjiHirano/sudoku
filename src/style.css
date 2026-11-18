@@ -1,6 +1,7 @@
 :root { color: #18324a; background: #f4f1e9; font-family: ui-rounded, "Hiragino Maru Gothic ProN", "Noto Sans JP", sans-serif; font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
+.scan-corner-actions { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; }
 button, select, input { font: inherit; }
 button, .file-button { border: 1px solid #c9d1d4; background: #fffdf8; color: #18324a; border-radius: .65rem; padding: .6rem .85rem; cursor: pointer; transition: background .15s, transform .15s; }
 button:hover:not(:disabled), .file-button:hover { background: #e7f0ee; transform: translateY(-1px); }
