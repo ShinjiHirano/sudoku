@@ -1,7 +1,7 @@
 import './style.css';
 import { cropGrid, recognizeGrid, type GridCrop } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
-import { candidates, conflicts, isComplete, peerIndexes, setEntry, setGiven, toggleNote } from './sudoku';
+import { blockedByDigit, boardValue, candidates, conflicts, isComplete, peerIndexes, setEntry, setGiven, toggleNote } from './sudoku';
 import { exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
 import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
 
@@ -87,10 +87,10 @@ function redo(): void {
   render();
 }
 
-function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>): string {
+function boardCell(index: number, puzzle: Puzzle, conflictSet: Set<number>, blockedCells: Set<number>, selectedValue: Digit): string {
   const value = puzzle.givens[index] || puzzle.entries[index];
-  const sameNumber = value && value === (puzzle.givens[selected] || puzzle.entries[selected]);
-  const related = peerIndexes(selected).includes(index);
+  const sameNumber = Boolean(value && value === selectedValue);
+  const related = selectedValue ? blockedCells.has(index) && !sameNumber : peerIndexes(selected).includes(index);
   const classNames = [
     'cell', index === selected ? 'is-selected' : '', related ? 'is-related' : '', sameNumber ? 'is-same' : '',
     conflictSet.has(index) ? 'is-conflict' : '', reviewCells.has(index) ? 'needs-review' : '',
@@ -126,7 +126,9 @@ function render(): void {
   const puzzle = activePuzzle();
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
-  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet)).join('');
+  const selectedValue = boardValue(puzzle, selected);
+  const blockedCells = blockedByDigit(puzzle, selectedValue);
+  const board = Array.from({ length: 81 }, (_, index) => boardCell(index, puzzle, conflictSet, blockedCells, selectedValue)).join('');
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   ${notice || complete ? `<p class="notice" role="status">${notice || '完成です！'}</p>` : ''}
   ${menuOpen ? utilityMenu(book, puzzle) : ''}

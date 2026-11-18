@@ -30,6 +30,16 @@ export function peerIndexes(index: number): number[] {
   return [...peers];
 }
 
+/** Cells where a selected digit can no longer be placed. */
+export function blockedByDigit(puzzle: Puzzle, digit: Digit): Set<number> {
+  if (!digit) return new Set();
+  const blocked = new Set<number>();
+  boardValues(puzzle).forEach((value, index) => {
+    if (value === digit) peerIndexes(index).forEach((peer) => blocked.add(peer));
+  });
+  return blocked;
+}
+
 export function conflicts(puzzle: Puzzle): ConflictMap {
   const values = boardValues(puzzle);
   const result = new Set<number>();
