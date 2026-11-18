@@ -26,18 +26,6 @@ interface GridLines {
   vertical: number[];
 }
 
-interface GridPaths {
-  horizontal: number[][];
-  vertical: number[][];
-}
-
-interface CellBoundaries {
-  top: number[];
-  right: number[];
-  bottom: number[];
-  left: number[];
-}
-
 interface PreparedCell {
   canvas: HTMLCanvasElement;
   inkRatio: number;
@@ -247,35 +235,37 @@ function traceGridLine(image: ImageData, center: number, vertical: boolean): num
   return smoothPath(path);
 }
 
-function traceGridPaths(image: ImageData, lines: GridLines): GridPaths {
-  return {
-    horizontal: lines.horizontal.map((center) => traceGridLine(image, center, false)),
-    vertical: lines.vertical.map((center) => traceGridLine(image, center, true)),
-  };
+function gridIntersections(image: ImageData, lines: GridLines): GridPoint[][] {
+  const verticalPaths = lines.vertical.map((center) => traceGridLine(image, center, true));
+  const horizontalPaths = lines.horizontal.map((center) => traceGridLine(image, center, false));
+  return lines.horizontal.map((horizontalCenter, row) => lines.vertical.map((verticalCenter, column) => {
+    let x = verticalCenter;
+    let y = horizontalCenter;
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      y = horizontalPaths[row][Math.max(0, Math.min(image.width - 1, Math.round(x)))];
+      x = verticalPaths[column][Math.max(0, Math.min(image.height - 1, Math.round(y)))];
+    }
+    return { x, y };
+  }));
 }
 
-function cellBoundaries(paths: GridPaths, index: number): CellBoundaries {
+function cellCorners(intersections: GridPoint[][], index: number): GridCorners {
   const row = Math.floor(index / 9);
   const column = index % 9;
-  return {
-    top: paths.horizontal[row],
-    right: paths.vertical[column + 1],
-    bottom: paths.horizontal[row + 1],
-    left: paths.vertical[column],
-  };
+  return [intersections[row][column], intersections[row][column + 1], intersections[row + 1][column + 1], intersections[row + 1][column]];
 }
 
-function pathAt(path: number[], position: number): number {
-  return path[Math.max(0, Math.min(path.length - 1, Math.round(position)))];
-}
-
-/**
- * Maps the four traced, potentially curved cell borders to a square. The
- * iterative mapping keeps every point on a border on the output edge; using
- * only four corners would leave a book-page curve inside the output cell.
- */
-function warpCell(source: ImageData, boundaries: CellBoundaries, size = OCR_CELL_SIZE): HTMLCanvasElement {
+/** Locally rectifies one cell from its four stable grid intersections. */
+function warpCell(source: ImageData, corners: GridCorners, size = OCR_CELL_SIZE): HTMLCanvasElement {
   const { width, height, data } = source;
+  const unitCorners: GridPoint[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  const equations: number[][] = [];
+  unitCorners.forEach((point, index) => {
+    const target = corners[index];
+    equations.push([point.x, point.y, 1, 0, 0, 0, -point.x * target.x, -point.y * target.x, target.x]);
+    equations.push([0, 0, 0, point.x, point.y, 1, -point.x * target.y, -point.y * target.y, target.y]);
+  });
+  const [a, b, c, d, e, f, g, h] = solveLinearSystem(equations);
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -286,14 +276,9 @@ function warpCell(source: ImageData, boundaries: CellBoundaries, size = OCR_CELL
     const v = y / (size - 1);
     for (let x = 0; x < size; x += 1) {
       const u = x / (size - 1);
-      let sourceX = (pathAt(boundaries.left, height * v) * (1 - u)) + (pathAt(boundaries.right, height * v) * u);
-      let sourceY = (pathAt(boundaries.top, width * u) * (1 - v)) + (pathAt(boundaries.bottom, width * u) * v);
-      for (let iteration = 0; iteration < 4; iteration += 1) {
-        sourceX = (pathAt(boundaries.left, sourceY) * (1 - u)) + (pathAt(boundaries.right, sourceY) * u);
-        sourceY = (pathAt(boundaries.top, sourceX) * (1 - v)) + (pathAt(boundaries.bottom, sourceX) * v);
-      }
-      sourceX = Math.round(sourceX);
-      sourceY = Math.round(sourceY);
+      const divisor = g * u + h * v + 1;
+      const sourceX = Math.round((a * u + b * v + c) / divisor);
+      const sourceY = Math.round((d * u + e * v + f) / divisor);
       if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
       const inputOffset = (sourceY * width + sourceX) * 4;
       const outputOffset = (y * size + x) * 4;
@@ -388,9 +373,9 @@ export async function recognizeGrid(
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
-    const paths = traceGridPaths(source, lines);
+    const intersections = gridIntersections(source, lines);
     for (let index = 0; index < 81; index += 1) {
-      const warpedCell = warpCell(source, cellBoundaries(paths, index));
+      const warpedCell = warpCell(source, cellCorners(intersections, index));
       warpedCells.push(warpedCell);
       const cell = prepareWarpedCell(warpedCell);
       const result = await recognizePreparedCell(worker, cell);
@@ -424,8 +409,8 @@ export async function recognizeCellVariants(
   try {
     const source = imageDataFromSource(image, width, height);
     const lines = detectGridLines(image, width, height);
-    const paths = traceGridPaths(source, lines);
-    const warpedCell = warpCell(source, cellBoundaries(paths, index));
+    const intersections = gridIntersections(source, lines);
+    const warpedCell = warpCell(source, cellCorners(intersections, index));
     for (const [variantIndex, variant] of variants.entries()) {
       const cell = prepareWarpedCell(warpedCell, variant.trimRatio, variant.threshold);
       const result = await recognizePreparedCell(worker, cell, false);
