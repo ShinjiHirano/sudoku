@@ -2,17 +2,20 @@ import './style.css';
 import { recognizeCellVariants, recognizeGrid, warpGrid, type GridCorners, type OcrCellResult, type OcrResult } from './ocr';
 import { googleDriveReady, saveToDrive } from './drive';
 import { boardValue, canPlace, conflicts, effectiveCandidates, isComplete, setEntry, setGiven, toggleCandidateExclusion } from './sudoku';
-import { addImportedBooks, exportBackup, initialBooks, legacyCsvToPuzzle, loadBooks, parseBackup, saveBooks } from './storage';
-import { makeBook, makePuzzle, type Book, type Digit, type Puzzle } from './types';
+import {
+  addPuzzle, createBook, deleteBook, deletePuzzle, importBooks, legacyCsvToPuzzle, loadBackup, loadBook,
+  openLibrary, parseBackup, renameBook, savePuzzle, type BookSummary, type OpenBook,
+} from './storage';
+import { makePuzzle, type Digit, type Puzzle } from './types';
 
 type Mode = 'play' | 'edit' | 'scan' | 'review';
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('表示領域を初期化できません。');
 const app: HTMLDivElement = appElement;
 
-let books: Book[] = [];
-let activeBookId = '';
-let activePuzzleId = '';
+let bookList: BookSummary[] = [];
+let openedBook: OpenBook;
+let activePuzzleIndex = 0;
 let mode: Mode = 'play';
 let menuOpen = false;
 let selected = 0;
@@ -37,43 +40,36 @@ let ocrDraft: OcrResult | null = null;
 let reparseProgress = '';
 let reparseSuggestion: { index: number; result: OcrCellResult } | null = null;
 
-function activeBook(): Book {
-  return books.find((book) => book.id === activeBookId) ?? books[0];
-}
-
 function activePuzzle(): Puzzle {
-  return activeBook().puzzles.find((puzzle) => puzzle.id === activePuzzleId) ?? activeBook().puzzles[0];
+  return openedBook.puzzles[activePuzzleIndex].puzzle;
 }
 
 function clonePuzzle(puzzle: Puzzle): Puzzle {
   return structuredClone(puzzle);
 }
 
-async function persist(): Promise<void> {
-  await saveBooks(books);
-}
-
 function replacePuzzle(next: Puzzle, recordHistory = true): void {
-  const book = activeBook();
-  const index = book.puzzles.findIndex((puzzle) => puzzle.id === next.id);
-  if (index < 0) return;
+  const previous = openedBook.puzzles[activePuzzleIndex];
+  if (previous.puzzle.id !== next.id) return;
   if (recordHistory) {
-    undoStack.push(clonePuzzle(book.puzzles[index]));
+    undoStack.push(clonePuzzle(previous.puzzle));
     if (undoStack.length > 100) undoStack.shift();
     redoStack = [];
   }
-  book.puzzles[index] = next;
-  void persist();
+  const record = { ...previous, puzzle: next };
+  openedBook.puzzles[activePuzzleIndex] = record;
+  void savePuzzle(record).catch(() => setNotice('問題を端末に保存できませんでした。'));
 }
 
 function renameActiveBook(name: string): void {
   const nextName = name.trim();
   if (!nextName) { render(); return; }
-  const book = activeBook();
-  if (book.name === nextName) return;
-  books = books.map((item) => item.id === book.id ? { ...item, name: nextName } : item);
-  void persist();
-  render();
+  if (openedBook.name === nextName) return;
+  void updateLibrary(async () => {
+    const summary = await renameBook(openedBook.key, nextName);
+    openedBook.name = summary.name;
+    bookList = bookList.map((item) => item.key === summary.key ? summary : item);
+  }, '問題集名を保存できませんでした。');
 }
 
 function setNotice(message: string): void {
@@ -91,65 +87,68 @@ function discardOcrReview(): void {
   reparseSuggestion = null;
 }
 
-function selectPuzzle(book: Book, puzzle: Puzzle): void {
-  activeBookId = book.id;
-  activePuzzleId = puzzle.id;
+function selectPuzzle(book: OpenBook, index = 0): void {
+  openedBook = book;
+  activePuzzleIndex = index;
   selected = 0;
   paletteSelected = null;
   undoStack = [];
   redoStack = [];
   notice = '';
   completionCelebration = false;
+  reviewCells.clear();
   discardOcrReview();
 }
 
-async function saveDeletion(nextBooks: Book[], nextBook: Book, nextPuzzle: Puzzle, message: string): Promise<void> {
+async function updateLibrary(action: () => Promise<void>, failure?: string): Promise<void> {
   if (app.inert) return;
   app.inert = true;
   try {
-    await saveBooks(nextBooks);
-    books = nextBooks;
-    selectPuzzle(nextBook, nextPuzzle);
-    reviewCells.clear();
-    if (scanImageUrl) URL.revokeObjectURL(scanImageUrl);
-    scanImage = null;
-    scanImageUrl = '';
-    scanProgress = '';
-    mode = 'play';
-    notice = message;
-  } catch {
-    notice = '削除内容を端末に保存できませんでした。';
+    await action();
+  } catch (error) {
+    notice = failure ?? (error instanceof Error ? error.message : '処理に失敗しました。');
+    menuOpen = false;
   } finally {
     app.inert = false;
-    menuOpen = false;
     render();
   }
 }
 
+function finishDeletion(message: string): void {
+  if (scanImageUrl) URL.revokeObjectURL(scanImageUrl);
+  scanImage = null;
+  scanImageUrl = '';
+  scanProgress = '';
+  mode = 'play';
+  menuOpen = false;
+  notice = message;
+}
+
 function deleteActivePuzzle(): void {
-  const book = activeBook();
-  const puzzle = activePuzzle();
-  const index = book.puzzles.indexOf(puzzle);
+  const book = openedBook;
+  const index = activePuzzleIndex;
+  const { key, puzzle } = book.puzzles[index];
   const replacement = book.puzzles.length === 1 ? '\n削除後、この問題集に空の問題を1問作成します。' : '';
   if (!window.confirm(`「${book.name}」の「${puzzle.title}」を削除しますか？\n途中入力と候補メモも削除されます。${replacement}`)) return;
 
-  const puzzles = book.puzzles.filter((item) => item !== puzzle);
-  if (!puzzles.length) puzzles.push(makePuzzle('問題 1'));
-  const nextBook = { ...book, puzzles };
-  const nextBooks = books.map((item) => item === book ? nextBook : item);
-  void saveDeletion(nextBooks, nextBook, puzzles[Math.min(index, puzzles.length - 1)], '問題を削除しました。');
+  void updateLibrary(async () => {
+    const puzzles = await deletePuzzle(book.key, key);
+    selectPuzzle({ ...book, puzzles }, Math.min(index, puzzles.length - 1));
+    finishDeletion('問題を削除しました。');
+  }, '削除内容を端末に保存できませんでした。');
 }
 
 function deleteActiveBook(): void {
-  const book = activeBook();
-  const index = books.indexOf(book);
-  const replacement = books.length === 1 ? '\n削除後、空の問題が1問入った新しい問題集を作成します。' : '';
+  const book = openedBook;
+  const replacement = bookList.length === 1 ? '\n削除後、空の問題が1問入った新しい問題集を作成します。' : '';
   if (!window.confirm(`問題集「${book.name}」を削除しますか？\n中の全${book.puzzles.length}問と、その途中入力・候補メモを削除します。${replacement}`)) return;
 
-  const remaining = books.filter((item) => item !== book);
-  const nextBooks = remaining.length ? remaining : initialBooks();
-  const nextBook = nextBooks[Math.min(index, nextBooks.length - 1)];
-  void saveDeletion(nextBooks, nextBook, nextBook.puzzles[0], '問題集を削除しました。');
+  void updateLibrary(async () => {
+    const result = await deleteBook(book.key, book.puzzles.length);
+    bookList = result.bookList;
+    selectPuzzle(result.book);
+    finishDeletion('問題集を削除しました。');
+  });
 }
 
 function digit(index: number, value: Digit): void {
@@ -302,17 +301,16 @@ function bindCornerDrag(button: HTMLButtonElement): void {
 function utilityMenu(puzzle: Puzzle): string {
   return `<section class="utility-menu" aria-label="メニュー">
     <div class="utility-menu-header"><strong>メニュー</strong><button id="menu-close" aria-label="メニューを閉じる">×</button></div>
-    <section><p class="menu-label">問題を管理</p><label>問題集名<input id="book-name-input" value="${escapeHtml(activeBook().name)}"></label><div class="menu-actions"><button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button><button id="delete-puzzle" class="delete-button">問題を削除</button><button id="delete-book" class="delete-button">問題集を削除</button></div></section>
+    <section><p class="menu-label">問題を管理</p><label>問題集名<input id="book-name-input" value="${escapeHtml(openedBook.name)}"></label><div class="menu-actions"><button id="new-puzzle">＋ 問題</button><button id="new-book">＋ 問題集</button><button id="delete-puzzle" class="delete-button">問題を削除</button><button id="delete-book" class="delete-button">問題集を削除</button></div></section>
     <section><p class="menu-label">問題を作る</p><label>問題名<input id="title-input" value="${escapeHtml(puzzle.title)}"></label><div class="menu-actions"><button id="edit-start">問題を編集</button><button id="scan-toggle">▣ 写真から取込</button></div></section>
     <details><summary>その他の操作</summary><div class="menu-actions details-actions"><button id="redo" ${redoStack.length ? '' : 'disabled'}>Redo ↷</button><button id="export">JSON を書き出す</button><label class="file-button">JSON・CSV から追加<input id="import-file" type="file" accept="application/json,.json,.csv,text/csv"></label><button id="drive-save" ${googleDriveReady() ? '' : 'disabled'}>Google Drive に保存</button></div>${googleDriveReady() ? '' : '<p class="hint">Drive は public/config.js に OAuth Client ID を設定すると有効になります。</p>'}</details>
   </section>`;
 }
 
-function quickControls(book: Book, puzzle: Puzzle): string {
-  const puzzleIndex = Math.max(0, book.puzzles.findIndex((item) => item.id === puzzle.id));
+function quickControls(): string {
   return `<section class="quick-controls" aria-label="問題とプレイ操作">
-    <label>問題集<select id="book-select">${books.map((item) => `<option value="${item.id}" ${item.id === book.id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
-    <div class="puzzle-nav" aria-label="問題を切り替える"><button id="previous-puzzle" ${puzzleIndex === 0 ? 'disabled' : ''} aria-label="前の問題">‹ 前へ</button><span><strong>${puzzleIndex + 1} / ${book.puzzles.length}</strong></span><button id="next-puzzle" ${puzzleIndex === book.puzzles.length - 1 ? 'disabled' : ''} aria-label="次の問題">次へ ›</button></div>
+    <label>問題集<select id="book-select">${bookList.map((item) => `<option value="${item.key}" ${item.key === openedBook.key ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select></label>
+    <div class="puzzle-nav" aria-label="問題を切り替える"><button id="previous-puzzle" ${activePuzzleIndex === 0 ? 'disabled' : ''} aria-label="前の問題">‹ 前へ</button><span><strong>${activePuzzleIndex + 1} / ${openedBook.puzzles.length}</strong></span><button id="next-puzzle" ${activePuzzleIndex === openedBook.puzzles.length - 1 ? 'disabled' : ''} aria-label="次の問題">次へ ›</button></div>
     ${mode === 'play' ? `<div class="quick-actions"><button id="candidates-toggle" class="${showCandidates ? 'active' : ''}">候補表示 ${showCandidates ? 'ON' : 'OFF'}</button><button id="exclude-toggle" class="${candidateExclusionMode ? 'active' : ''}" aria-pressed="${candidateExclusionMode}">${candidateExclusionMode ? '操作：候補から除外' : '操作：数字を確定'}</button><button id="undo" ${undoStack.length ? '' : 'disabled'}>↶ Undo</button><button id="retry">↻ 最初からリトライ</button></div>` : ''}
   </section>`;
 }
@@ -352,7 +350,6 @@ function completionOverlay(): string {
 }
 
 function render(): void {
-  const book = activeBook();
   const puzzle = activePuzzle();
   const conflictSet = conflicts(puzzle);
   const complete = isComplete(puzzle);
@@ -362,7 +359,7 @@ function render(): void {
   const editControls = mode === 'edit' ? '<div class="edit-banner"><span>問題を編集しています</span><div class="edit-actions"><button id="finish-edit">完了</button></div></div>' : '';
   app.innerHTML = `<header class="play-header"><div><p class="eyebrow">OFFLINE SUDOKU NOTE</p><h1>数独ノート</h1></div><button id="menu-toggle" class="menu-toggle" aria-expanded="${menuOpen}" aria-label="メニューを開く">☰</button></header>
   <p class="notice ${noticeText ? 'is-visible' : 'is-empty'}" role="status">${escapeHtml(noticeText) || '　'}</p>
-  ${mode === 'play' || mode === 'edit' ? quickControls(book, puzzle) : ''}
+  ${mode === 'play' || mode === 'edit' ? quickControls() : ''}
   ${menuOpen ? utilityMenu(puzzle) : ''}
   ${mode === 'scan' ? scanPane() : mode === 'review' ? ocrReviewPane() : `<section class="play-layout"><section class="board-area">
     ${editControls}
@@ -379,44 +376,41 @@ function escapeHtml(value: string): string {
 }
 
 function downloadBackup(): void {
-  const file = new Blob([JSON.stringify(exportBackup(books), null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(file);
-  const link = document.createElement('a');
-  link.href = url; link.download = `sudoku-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click();
-  URL.revokeObjectURL(url);
-  setNotice('JSON を書き出しました。');
+  void updateLibrary(async () => {
+    const backup = await loadBackup();
+    const file = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url; link.download = `sudoku-backup-${backup.exportedAt.slice(0, 10)}.json`; link.click();
+    URL.revokeObjectURL(url);
+    menuOpen = false;
+    notice = 'JSON を書き出しました。';
+  }, 'JSON を書き出せませんでした。');
 }
 
-async function importFile(file: File): Promise<void> {
-  if (app.inert) return;
-  app.inert = true;
-  try {
+async function appendPuzzle(puzzle: Puzzle): Promise<void> {
+  const record = await addPuzzle(openedBook.key, puzzle);
+  openedBook.puzzles.push(record);
+  selectPuzzle(openedBook, openedBook.puzzles.length - 1);
+}
+
+function importFile(file: File): void {
+  void updateLibrary(async () => {
+    menuOpen = false;
     const text = await file.text();
     if (file.name.toLowerCase().endsWith('.csv')) {
-      const book = activeBook();
       const puzzle = legacyCsvToPuzzle(text, file.name.replace(/\.csv$/i, ''));
-      const nextBooks = books.map((item) => item === book ? { ...item, puzzles: [...item.puzzles, puzzle] } : item);
-      await saveBooks(nextBooks);
-      books = nextBooks;
-      activePuzzleId = puzzle.id;
+      await appendPuzzle(puzzle);
       notice = '問題を追加しました。';
     } else {
-      const result = addImportedBooks(books, parseBackup(text));
-      if (result.addedPuzzles > 0) {
-        await saveBooks(result.books);
-        books = result.books;
-        notice = `問題集 ${result.addedBooks} 件、問題 ${result.addedPuzzles} 問を追加しました。`;
-      } else {
-        notice = '追加する新しい問題はありませんでした。';
-      }
+      const result = await importBooks(parseBackup(text), openedBook.key);
+      bookList = result.bookList;
+      openedBook.puzzles = openedBook.puzzles.concat(result.openedBookAdditions);
+      notice = result.addedPuzzles > 0
+        ? `問題集 ${result.addedBooks} 件、問題 ${result.addedPuzzles} 問を追加しました。`
+        : '追加する新しい問題はありませんでした。';
     }
-  } catch (error) {
-    notice = error instanceof Error ? error.message : '読み込みに失敗しました。';
-  } finally {
-    app.inert = false;
-    menuOpen = false;
-    render();
-  }
+  });
 }
 
 function loadScan(file: File): void {
@@ -460,21 +454,21 @@ function rotateScan(direction: -1 | 1): void {
 
 async function runOcr(): Promise<void> {
   if (!scanImage) return;
-  const puzzleId = activePuzzle().id;
+  const puzzleKey = openedBook.puzzles[activePuzzleIndex].key;
   scanProgress = 'OCR を準備中…'; render();
   try {
     const cropped = warpGrid(scanImage, scanCorners);
     const result = await recognizeGrid(cropped, cropped.width, cropped.height, (done, total) => {
-      if (activePuzzle().id !== puzzleId) return;
+      if (openedBook.puzzles[activePuzzleIndex].key !== puzzleKey) return;
       scanProgress = `認識中 ${done}/${total}`;
       const button = document.querySelector('#run-ocr');
       if (button) button.textContent = scanProgress;
     });
-    if (activePuzzle().id !== puzzleId) return;
+    if (openedBook.puzzles[activePuzzleIndex].key !== puzzleKey) return;
     ocrSource = cropped; ocrPreviewUrl = cropped.toDataURL('image/jpeg', .88); ocrRectifiedPreviewUrl = result.preview.toDataURL('image/jpeg', .88); ocrInputPreviewUrl = result.inputPreview.toDataURL('image/jpeg', .88); ocrDraft = result; reparseSuggestion = null; paletteSelected = null; selected = 0;
     mode = 'review'; scanImage = null; URL.revokeObjectURL(scanImageUrl); scanImageUrl = ''; scanProgress = ''; notice = ''; render();
   } catch (error) {
-    if (activePuzzle().id !== puzzleId) return;
+    if (openedBook.puzzles[activePuzzleIndex].key !== puzzleKey) return;
     scanProgress = '';
     setNotice(error instanceof Error ? error.message : 'OCR に失敗しました。');
   }
@@ -545,11 +539,9 @@ function confirmOcrReview(): void {
 }
 
 function changePuzzle(offset: number): void {
-  const book = activeBook();
-  const currentIndex = book.puzzles.findIndex((puzzle) => puzzle.id === activePuzzleId);
-  const nextIndex = currentIndex + offset;
-  if (nextIndex < 0 || nextIndex >= book.puzzles.length) return;
-  selectPuzzle(book, book.puzzles[nextIndex]);
+  const nextIndex = activePuzzleIndex + offset;
+  if (nextIndex < 0 || nextIndex >= openedBook.puzzles.length) return;
+  selectPuzzle(openedBook, nextIndex);
   render();
 }
 
@@ -575,18 +567,28 @@ function bindEvents(): void {
   document.querySelector('#menu-toggle')?.addEventListener('click', () => { menuOpen = !menuOpen; render(); });
   document.querySelector('#menu-close')?.addEventListener('click', () => { menuOpen = false; render(); });
   document.querySelector<HTMLSelectElement>('#book-select')?.addEventListener('change', (event) => {
-    const book = books.find((item) => item.id === (event.target as HTMLSelectElement).value);
-    if (!book) return;
-    selectPuzzle(book, book.puzzles[0]);
-    render();
+    const key = Number((event.target as HTMLSelectElement).value);
+    if (key === openedBook.key) return;
+    void updateLibrary(async () => { selectPuzzle(await loadBook(key)); });
   });
   document.querySelector('#previous-puzzle')?.addEventListener('click', () => changePuzzle(-1));
   document.querySelector('#next-puzzle')?.addEventListener('click', () => changePuzzle(1));
   document.querySelector('#candidates-toggle')?.addEventListener('click', () => { showCandidates = !showCandidates; render(); });
   document.querySelector('#exclude-toggle')?.addEventListener('click', () => { candidateExclusionMode = !candidateExclusionMode; if (candidateExclusionMode) showCandidates = true; render(); });
   document.querySelector('#undo')?.addEventListener('click', undo); document.querySelector('#redo')?.addEventListener('click', redo);
-  document.querySelector('#new-puzzle')?.addEventListener('click', () => { const puzzle = makePuzzle(`問題 ${activeBook().puzzles.length + 1}`); activeBook().puzzles.push(puzzle); activePuzzleId = puzzle.id; discardOcrReview(); void persist(); render(); });
-  document.querySelector('#new-book')?.addEventListener('click', () => { const name = window.prompt('問題集名', '新しい問題集'); if (!name) return; const book = makeBook(name); const puzzle = makePuzzle('問題 1'); book.puzzles.push(puzzle); books.push(book); activeBookId = book.id; activePuzzleId = puzzle.id; discardOcrReview(); void persist(); render(); });
+  document.querySelector('#new-puzzle')?.addEventListener('click', () => {
+    void updateLibrary(() => appendPuzzle(makePuzzle(`問題 ${openedBook.puzzles.length + 1}`)), '問題を追加できませんでした。');
+  });
+  document.querySelector('#new-book')?.addEventListener('click', () => {
+    const name = window.prompt('問題集名', '新しい問題集');
+    if (!name) return;
+    void updateLibrary(async () => {
+      const book = await createBook(name);
+      const { key, id, name: bookName } = book;
+      bookList.push({ key, id, name: bookName });
+      selectPuzzle(book);
+    }, '問題集を追加できませんでした。');
+  });
   document.querySelector('#delete-puzzle')?.addEventListener('click', deleteActivePuzzle);
   document.querySelector('#delete-book')?.addEventListener('click', deleteActiveBook);
   document.querySelector<HTMLInputElement>('#book-name-input')?.addEventListener('change', (event) => renameActiveBook((event.target as HTMLInputElement).value));
@@ -598,8 +600,8 @@ function bindEvents(): void {
   document.querySelector('#retry')?.addEventListener('click', retryPuzzle);
   document.querySelector<HTMLInputElement>('#title-input')?.addEventListener('change', (event) => { const puzzle = activePuzzle(); replacePuzzle({ ...puzzle, title: (event.target as HTMLInputElement).value.trim() || '無題の問題' }); render(); });
   document.querySelector('#export')?.addEventListener('click', downloadBackup);
-  document.querySelector<HTMLInputElement>('#import-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void importFile(file); });
-  document.querySelector('#drive-save')?.addEventListener('click', async () => { try { await saveToDrive(exportBackup(books)); setNotice('Google Drive に新しいバックアップを保存しました。'); } catch (error) { setNotice(error instanceof Error ? error.message : 'Google Drive への保存に失敗しました。'); } });
+  document.querySelector<HTMLInputElement>('#import-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) importFile(file); });
+  document.querySelector('#drive-save')?.addEventListener('click', async () => { try { await saveToDrive(loadBackup); setNotice('Google Drive に新しいバックアップを保存しました。'); } catch (error) { setNotice(error instanceof Error ? error.message : 'Google Drive への保存に失敗しました。'); } });
   document.querySelector<HTMLInputElement>('#scan-file')?.addEventListener('change', (event) => { const file = (event.target as HTMLInputElement).files?.[0]; if (file) loadScan(file); });
   document.querySelector('#run-ocr')?.addEventListener('click', () => void runOcr());
   document.querySelector('#reset-corners')?.addEventListener('click', () => { scanCorners = defaultGridCorners(); render(); });
@@ -614,7 +616,7 @@ function bindEvents(): void {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (app.inert || mode === 'scan' || mode === 'review' || (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
+  if (!openedBook || app.inert || mode === 'scan' || mode === 'review' || (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
   if (/^[1-9]$/.test(event.key)) digit(selected, Number(event.key) as Digit);
   else if (event.key === 'Backspace' || event.key === 'Delete') digit(selected, 0);
   else if (event.key === 'ArrowUp') { selected = Math.max(0, selected - 9); render(); }
@@ -625,10 +627,13 @@ window.addEventListener('keydown', (event) => {
 
 async function start(): Promise<void> {
   try {
-    books = (await loadBooks()).map((book) => book.puzzles.length ? book : { ...book, puzzles: [makePuzzle('問題 1')] });
-  } catch { notice = '端末内ストレージを利用できません。'; }
-  if (!books.length) { books = initialBooks(); await persist(); }
-  activeBookId = books[0].id; activePuzzleId = books[0].puzzles[0].id; render();
+    const library = await openLibrary();
+    bookList = library.bookList;
+    selectPuzzle(library.book);
+    render();
+  } catch (error) {
+    app.textContent = error instanceof Error ? error.message : '端末内の問題集を読み込めませんでした。';
+  }
 }
 
 void start();
