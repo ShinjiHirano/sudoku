@@ -26,9 +26,10 @@ export async function loadBooks(): Promise<Book[]> {
 export async function saveBooks(books: Book[]): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const request = db.transaction(STORE, 'readwrite').objectStore(STORE).put(books, KEY);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    const transaction = db.transaction(STORE, 'readwrite');
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error('端末への保存に失敗しました。'));
+    transaction.objectStore(STORE).put(books, KEY);
   });
 }
 
@@ -58,6 +59,36 @@ export function parseBackup(text: string): Book[] {
     throw new Error('問題データに不正な値があります。');
   }
   return backup.books;
+}
+
+export function addImportedBooks(books: Book[], imported: Book[]): { books: Book[]; addedBooks: number; addedPuzzles: number } {
+  const merged = [...books];
+  const bookIndexes = new Map(books.map((book, index) => [book.id, index]));
+  const puzzleIds = new Set(books.flatMap((book) => book.puzzles.map((puzzle) => puzzle.id)));
+  let addedBooks = 0;
+  let addedPuzzles = 0;
+
+  for (const book of imported) {
+    const newPuzzles = book.puzzles.filter((puzzle) => {
+      if (puzzleIds.has(puzzle.id)) return false;
+      puzzleIds.add(puzzle.id);
+      return true;
+    });
+    if (!newPuzzles.length) continue;
+
+    const index = bookIndexes.get(book.id);
+    if (index === undefined) {
+      bookIndexes.set(book.id, merged.length);
+      merged.push({ ...book, puzzles: newPuzzles });
+      addedBooks++;
+    } else {
+      const existing = merged[index];
+      merged[index] = { ...existing, puzzles: [...existing.puzzles, ...newPuzzles] };
+    }
+    addedPuzzles += newPuzzles.length;
+  }
+
+  return { books: merged, addedBooks, addedPuzzles };
 }
 
 export function legacyCsvToPuzzle(text: string, title = '取り込み問題'): Puzzle {

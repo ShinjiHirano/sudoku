@@ -6,6 +6,8 @@ body { margin: 0; min-width: 320px; }
 button, select, input { font: inherit; }
 button, .file-button { border: 1px solid #c9d1d4; background: #fffdf8; color: #18324a; border-radius: .65rem; padding: .6rem .85rem; cursor: pointer; transition: background .15s, transform .15s; }
 button:hover:not(:disabled), .file-button:hover { background: #e7f0ee; transform: translateY(-1px); }
+button.delete-button { color: #9d3026; border-color: #d9b2a8; }
+button.delete-button:hover:not(:disabled) { background: #fde8dc; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 #app { max-width: 1120px; margin: 0 auto; padding: 1.2rem clamp(1rem, 4vw, 3rem) 3rem; }
 .topbar { display: flex; justify-content: space-between; gap: 1rem; align-items: end; border-bottom: 3px solid #18324a; padding-bottom: 1rem; }

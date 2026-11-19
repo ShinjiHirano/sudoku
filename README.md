@@ -49,7 +49,7 @@ python3 scripts/import_tagutis.py
 
 `.tagutis-import/review.html` をブラウザで開くと、元画像と抽出盤面を比較できます。確認・修正した盤面は画面の「修正JSONを保存」でダウンロードし、`python3 scripts/import_tagutis.py --corrections ダウンロードしたファイル.json` で再生成します。問題集には解が一意と確認できた盤面が入り、要確認と取得不可の例題は確認画面に残ります。
 
-アプリの「JSON を読み込む」で `.tagutis-import/tagutis-puzzles.json` を取り込めます。読み込み操作は現在の問題集全体を置き換えます。既存の問題や途中入力も残すには、先にアプリからJSONを書き出し、生成コマンドに `--base-backup 書き出したバックアップ.json` を指定してから、生成されたJSONを読み込みます。
+アプリの「JSON・CSV から追加」で `.tagutis-import/tagutis-puzzles.json` を取り込めます。新しい問題集と問題が追加され、既存の問題や途中入力、候補メモは保持されます。同じ ID の問題はそのまま残るため、同じ JSON を再度取り込んでも重複しません。
 
 ## Google Drive（任意）
 
