@@ -2,3 +2,5 @@ node_modules/
 dist/
 .sites-checkout/
 .DS_Store
+.tagutis-import/
+__pycache__/

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tagutis 例題の確認</title>
+<style>
+  body { background: #f5f6f8; color: #17202a; font: 16px/1.5 system-ui, sans-serif; margin: 0; }
+  main { max-width: 1050px; margin: auto; padding: 1.5rem; }
+  h1, h2 { line-height: 1.2; }
+  button, select, input, textarea { font: inherit; }
+  button, select, input { padding: .35rem .6rem; }
+  a { color: #17427b; }
+  .toolbar, .links, .boards, .actions { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; }
+  article { background: white; border: 1px solid #d7dce2; border-radius: .6rem; padding: 1rem; margin: 1rem 0; }
+  .boards { align-items: start; }
+  figure { margin: 0; }
+  figcaption { margin: 0 0 .3rem; }
+  figure img, table { width: min(300px, 76vw); }
+  figure img { display: block; object-fit: contain; object-position: top left; }
+  table { border-collapse: collapse; aspect-ratio: 1; border: 2px solid #17202a; table-layout: fixed; }
+  td { border: 1px solid #a1aab4; width: 11.11%; text-align: center; color: #b33219; padding: 0; }
+  tr { height: 11.11%; }
+  td:nth-child(3n) { border-right: 2px solid #17202a; }
+  tr:nth-child(3n) td { border-bottom: 2px solid #17202a; }
+  .uncertain { background: #ffecaa; }
+  textarea { font: 16px/1.25 ui-monospace, monospace; display: block; margin-top: .4rem; }
+  .saved { color: #21632a; }
+  .reason { color: #7d2317; }
+</style>
+<main>
+  <h1>Tagutis 例題の確認</h1>
+  <p id="totals"></p>
+  <div class="toolbar">
+    <label>表示 <select id="filter"><option value="issues">要確認・取得不可</option><option value="all">すべて</option></select></label>
+    <label>例題の範囲 <select id="range"><option value="all">全範囲</option></select></label>
+    <label>例題番号 <input id="number" type="number" min="1" max="800" placeholder="例 31"></label>
+    <button id="download" type="button" disabled>修正JSONを保存</button>
+  </div>
+  <p>元画像と抽出結果を比較できます。修正するときは盤面を9桁ずつ9行で入力し、空欄は0にしてください。</p>
+  <div id="items"></div>
+</main>
+<template id="item">
+  <article>
+    <h2></h2>
+    <p class="links"></p>
+    <p class="reason" hidden></p>
+    <div class="boards">
+      <figure class="preview" hidden><figcaption>画像</figcaption><img loading="lazy" alt="例題画像"></figure>
+      <figure class="result" hidden><figcaption>抽出した初期盤面</figcaption><table aria-label="抽出した初期盤面"><tbody></tbody></table></figure>
+      <form>
+        <label>確認した初期盤面 <textarea rows="9" cols="10" spellcheck="false" inputmode="numeric"></textarea></label>
+        <p class="actions"><button type="submit">修正に反映</button><span class="saved" role="status"></span></p>
+      </form>
+    </div>
+  </article>
+</template>
+<script id="report-data" type="application/json">{{REPORT_DATA}}</script>
+<script>
+  const {items, totals, corrections} = JSON.parse(document.getElementById('report-data').textContent);
+  const labels = {extracted: '抽出済み', corrected: '確認済み', review: '要確認', unavailable: '取得不可'};
+  const template = document.getElementById('item');
+  const list = document.getElementById('items');
+  const showing = document.getElementById('filter');
+  const range = document.getElementById('range');
+  const number = document.getElementById('number');
+  const download = document.getElementById('download');
+  document.getElementById('totals').textContent = [
+    totals.requested + '問中', '出力 ' + totals.exported + '問',
+    '要確認 ' + totals.review + '問', '取得不可 ' + totals.unavailable + '問'
+  ].join('、');
+
+  const group = example => Math.floor((example - 1) / 100) * 100 + 1;
+  for (const from of new Set(items.map(item => group(item.number)))) {
+    range.add(new Option(from + '〜' + (from + 99), from));
+  }
+
+  function addLink(parent, url, label) {
+    if (!url) return;
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = label;
+    parent.append(link);
+  }
+
+  function card(item) {
+    const node = template.content.cloneNode(true);
+    node.querySelector('h2').textContent = '例題 ' + item.number + '　' + labels[item.status];
+    const links = node.querySelector('.links');
+    addLink(links, item.page, '例題ページ');
+    addLink(links, item.original || item.image, '元画像');
+    item.candidates.slice(0, 3).forEach((url, index) => addLink(links, url, '別の画像 ' + (index + 1)));
+    const reason = node.querySelector('.reason');
+    if (item.reasons.length) {
+      reason.hidden = false;
+      reason.textContent = item.reasons.join('。');
+    }
+    if (item.preview) {
+      node.querySelector('.preview').hidden = false;
+      node.querySelector('img').src = item.preview;
+    }
+    if (item.rows) {
+      node.querySelector('.result').hidden = false;
+      const tbody = node.querySelector('tbody');
+      const warnings = new Map((item.cells || []).map(warning => [warning.cell, warning.reason]));
+      item.rows.forEach((row, y) => {
+        const tr = tbody.insertRow();
+        [...row].forEach((digit, x) => {
+          const cell = tr.insertCell();
+          const warning = warnings.get(y * 9 + x);
+          if (digit !== '0') cell.textContent = digit;
+          if (warning) {
+            cell.className = 'uncertain';
+            cell.title = warning;
+          }
+        });
+      });
+    }
+    const form = node.querySelector('form');
+    const input = form.querySelector('textarea');
+    input.value = (corrections[item.number] || item.rows || []).join('\n');
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const rows = input.value.trim().split(/\s+/);
+      const valid = rows.length === 9 && rows.every(row => /^[0-9]{9}$/.test(row));
+      const status = form.querySelector('[role="status"]');
+      status.textContent = valid ? '保存対象に追加しました。' : '各行9桁の数字を9行入力してください。';
+      if (!valid) return;
+      corrections[item.number] = rows;
+      download.disabled = false;
+    });
+    return node;
+  }
+
+  function render() {
+    list.replaceChildren();
+    const visible = items.filter(item => {
+      if (number.value) return String(item.number) === number.value;
+      return (showing.value === 'all' || ['review', 'unavailable'].includes(item.status)) &&
+        (range.value === 'all' || String(group(item.number)) === range.value);
+    });
+    for (const item of visible) list.append(card(item));
+    if (!visible.length) {
+      const empty = document.createElement('p');
+      empty.textContent = '該当する例題はありません。';
+      list.append(empty);
+    }
+  }
+
+  showing.addEventListener('change', render);
+  range.addEventListener('change', render);
+  number.addEventListener('input', render);
+  download.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(corrections, null, 2) + '\n'], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'corrections.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  render();
+</script>
+</html>
